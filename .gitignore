@@ -1,0 +1,16 @@
+.gocache/
+.gopath/
+.gotmp/
+.idea/
+
+**/data/
+**/logs/
+**/*.db
+**/*.db-shm
+**/*.db-wal
+**/config/config.json
+**/config/config.yaml
+
+*.exe
+*.test
+coverage.out

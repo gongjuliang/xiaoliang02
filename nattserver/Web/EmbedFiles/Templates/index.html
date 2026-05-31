@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>NATT Server</title>
+    <link rel="stylesheet" href="/static/css/layui.css">
+    <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+<div id="loginView" class="login-view">
+    <form id="loginForm" class="login-panel">
+        <div class="brand-block">
+            <div class="brand-mark">NS</div>
+            <div>
+                <h1>NATT Server</h1>
+                <p>内网穿透服务端管理后台</p>
+            </div>
+        </div>
+        <label class="field">
+            <span>账号</span>
+            <input name="username" autocomplete="username" value="admin">
+        </label>
+        <label class="field">
+            <span>密码</span>
+            <input name="password" type="password" autocomplete="current-password">
+        </label>
+        <button class="layui-btn primary full" type="submit">登录</button>
+        <div id="loginError" class="form-error"></div>
+    </form>
+</div>
+
+<div id="appView" class="app-shell hidden">
+    <aside class="sidebar">
+        <div class="sidebar-brand">
+            <div class="brand-mark">NS</div>
+            <div>
+                <strong>NATT Server</strong>
+                <span>TCP Tunnel Admin</span>
+            </div>
+        </div>
+        <nav id="nav" class="nav-list">
+            <button data-view="dashboard" class="active">仪表盘</button>
+            <button data-view="clients">客户端</button>
+            <button data-view="tunnels">隧道</button>
+            <button data-view="config">配置</button>
+            <button data-view="audit">审计</button>
+        </nav>
+    </aside>
+    <main class="main-panel">
+        <header class="topbar">
+            <div>
+                <h2 id="viewTitle">仪表盘</h2>
+                <span id="viewSubTitle">运行概览</span>
+            </div>
+            <div class="top-actions">
+                <button id="refreshBtn" class="layui-btn secondary" type="button">刷新</button>
+                <button id="logoutBtn" class="layui-btn ghost" type="button">退出</button>
+            </div>
+        </header>
+        <section id="content" class="content"></section>
+    </main>
+</div>
+
+<div id="modalRoot" class="modal-root hidden"></div>
+
+<script src="/static/js/jquery/jquery-3.6.0.min.js"></script>
+<script src="/static/js/layui/layui.js"></script>
+<script src="/static/js/app.js"></script>
+</body>
+</html>
