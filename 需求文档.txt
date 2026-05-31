@@ -1,0 +1,579 @@
+# Go语言内外网穿透软件项目需求文档
+
+## 一、项目目标与首版范围
+
+1. 项目目标：开发一个 C/S 架构的内外网穿透工具，通过部署在公网服务器的服务端与部署在内网机器的客户端配合，实现公网端口到内网 TCP 服务端口的映射访问。
+
+2. 首版范围：
+   - 支持 TCP 端口穿透。
+   - 支持多客户端、多隧道并发运行。
+   - 支持服务端 Web 管理控制台。
+   - 支持客户端 Web 管理控制台。
+   - 支持 SQLite 持久化配置、状态、审计日志和基础统计数据。
+   - 支持 MCP AI 扩展接口，供 AI 工具查询和管理服务端/客户端状态。
+
+3. 首版暂不包含：
+   - UDP 穿透。
+   - HTTP 域名转发。
+   - HTTPS 证书托管。
+   - WebSocket 专用转发。
+   - P2P 打洞。
+
+4. 核心开发语言：Go 1.25。
+
+5. Web 控制台技术：Gin + HTML + CSS + jQuery + Layui。
+
+6. 数据库：SQLite。
+
+7. 通信安全：客户端与服务端之间支持可配置 TLS。开发环境可关闭 TLS，生产环境建议开启 TLS。
+
+## 二、项目目录与代码结构
+
+1. 工作区根目录：`D:\2025Code\ai\natt`。
+
+2. 服务端项目目录：`D:\2025Code\ai\natt\nattserver`。
+
+3. 客户端项目目录：`D:\2025Code\ai\natt\nattuser`。
+
+4. 公共参考项目目录：`D:\2025Code\ai\natt\commonGin`。
+
+5. 服务端和客户端均以 `commonGin` 的 Gin 项目结构为基础进行开发，保持路由、中间件、静态资源、模板、配置加载、日志管理等组织方式尽量一致。
+
+6. 建议目录结构：
+
+```text
+nattserver/
+  main.go
+  config/
+  internal/
+    api/
+    auth/
+    db/
+    tunnel/
+    protocol/
+    mcp/
+    service/
+  web/
+  data/
+  logs/
+
+nattuser/
+  main.go
+  config/
+  internal/
+    api/
+    auth/
+    db/
+    tunnel/
+    protocol/
+    mcp/
+    service/
+  web/
+  data/
+  logs/
+```
+
+## 三、核心架构
+
+1. 服务端职责：
+   - 部署在公网服务器。
+   - 提供 Web 管理控制台。
+   - 接收客户端注册、认证、心跳和控制连接。
+   - 维护客户端在线状态。
+   - 管理隧道配置和运行状态。
+   - 监听公网映射端口。
+   - 将公网访问流量转发到对应内网客户端。
+   - 提供 MCP 管理接口。
+
+2. 客户端职责：
+   - 部署在内网机器。
+   - 提供本地 Web 管理控制台。
+   - 连接一个或多个公网服务端。
+   - 维护与服务端的控制长连接。
+   - 接收服务端的数据转发请求。
+   - 连接本地内网 TCP 服务并转发流量。
+   - 提供 MCP 管理接口。
+
+3. 通信模型：
+   - 采用“控制连接 + 数据连接分离”模型。
+   - 控制连接用于认证、心跳、隧道状态同步、启停指令、数据连接协商。
+   - 数据连接用于实际 TCP 流量转发。
+   - 每个公网访问连接对应一条逻辑连接，使用唯一 `connection_id` 标识。
+   - 每条隧道使用唯一 `tunnel_id` 标识。
+
+## 四、穿透通信协议
+
+### 4.1 控制连接
+
+1. 客户端启动后，读取本地服务端连接配置，主动连接服务端的客户端接入端口。
+
+2. 客户端建立控制连接后发送认证消息，携带：
+   - 客户端秘钥。
+   - 客户端名称。
+   - 客户端版本。
+   - 本机系统信息。
+   - 支持的协议版本。
+
+3. 服务端认证通过后，返回认证成功消息，并下发客户端可用的隧道配置。
+
+4. 控制连接负责以下消息：
+   - `auth_request`：客户端认证请求。
+   - `auth_response`：服务端认证响应。
+   - `heartbeat`：客户端心跳。
+   - `heartbeat_ack`：服务端心跳响应。
+   - `tunnel_start`：启动隧道。
+   - `tunnel_stop`：停止隧道。
+   - `tunnel_status`：同步隧道状态。
+   - `data_open`：通知客户端建立数据连接。
+   - `data_close`：关闭指定数据连接。
+   - `error`：协议错误或业务错误。
+
+5. 心跳策略：
+   - 客户端每 15 秒发送一次心跳。
+   - 服务端连续 3 次未收到心跳，判定客户端离线。
+   - 客户端控制连接断开后，每 5 秒重连一次。
+   - 连续重连失败时持续重试，并在客户端后台展示连接异常状态。
+
+### 4.2 数据连接
+
+1. 服务端启动隧道后，监听对应公网映射端口。
+
+2. 外部用户连接公网映射端口时，服务端生成 `connection_id`，通过控制连接向客户端发送 `data_open` 消息。
+
+3. 客户端收到 `data_open` 后，主动建立到服务端的数据连接，并携带：
+   - 客户端秘钥。
+   - `tunnel_id`。
+   - `connection_id`。
+
+4. 服务端将公网访问连接与客户端数据连接绑定，开始双向复制 TCP 流量。
+
+5. 客户端数据连接建立后，连接本地内网地址和端口，并在本地连接与服务端数据连接之间双向转发流量。
+
+6. 任意一端连接关闭时，另一端同步关闭，并记录连接关闭原因。
+
+### 4.3 协议帧格式
+
+控制连接消息采用 JSON 帧，统一格式：
+
+```json
+{
+  "type": "heartbeat",
+  "request_id": "uuid",
+  "client_id": 1,
+  "tunnel_id": 10,
+  "connection_id": "uuid",
+  "timestamp": 1730000000,
+  "payload": {}
+}
+```
+
+帧传输格式：
+   - 前 4 字节：消息体长度，uint32，大端序。
+   - 后续字节：JSON 消息体。
+
+数据连接只负责原始 TCP 字节流转发。数据连接的认证和绑定信息在连接建立后的第一帧发送，认证完成后进入透明转发模式。
+
+## 五、隧道模型与运行规则
+
+1. 隧道字段：
+   - `id`：隧道 ID。
+   - `name`：隧道名称。
+   - `client_id`：关联客户端 ID。
+   - `protocol`：协议类型，首版固定为 `tcp`。
+   - `local_host`：客户端本地目标地址，例如 `127.0.0.1`。
+   - `local_port`：客户端本地目标端口。
+   - `remote_host`：服务端监听地址，默认 `0.0.0.0`。
+   - `remote_port`：公网映射端口。
+   - `status`：隧道状态。
+   - `auto_start`：是否随服务端启动自动启动。
+   - `remark`：备注。
+   - `created_at`：创建时间。
+   - `updated_at`：更新时间。
+
+2. 隧道状态：
+   - `stopped`：已停止。
+   - `starting`：启动中。
+   - `running`：运行中。
+   - `stopping`：停止中。
+   - `error`：异常。
+
+3. 端口规则：
+   - 同一服务端内 `remote_port` 必须唯一。
+   - `remote_port` 被占用时，隧道启动失败并记录错误。
+   - 删除或停止隧道后，服务端必须释放公网监听端口。
+
+4. 客户端离线规则：
+   - 客户端离线后，该客户端关联隧道状态显示为不可用。
+   - 服务端可保留公网监听端口，但新连接应立即拒绝或返回连接失败。
+   - 客户端恢复在线后，`auto_start=true` 的隧道自动恢复。
+
+5. 流量统计：
+   - 按隧道统计总上行字节数、总下行字节数、当前连接数、累计连接数。
+   - 统计数据用于服务端仪表盘和 MCP 查询。
+
+## 六、服务端 Web 管理控制台
+
+1. 登录功能：
+   - 账号密码登录。
+   - 登录成功后返回 JWT。
+   - 未登录或 JWT 失效时跳转登录页。
+
+2. 客户端管理：
+   - 展示客户端列表。
+   - 字段包括客户端 ID、秘钥摘要、名称、IP、授权状态、在线状态、最后在线时间、备注。
+   - 支持新增客户端授权。
+   - 支持禁用、启用、删除、轮换客户端秘钥。
+
+3. 隧道管理：
+   - 支持新增、编辑、删除、启动、停止、查看状态。
+   - 支持按客户端筛选隧道。
+   - 启动失败时展示失败原因。
+
+4. 系统配置：
+   - Web 管理端口。
+   - 客户端接入端口。
+   - 数据连接端口或端口范围。
+   - 公网映射端口允许范围。
+   - TLS 开关和证书路径。
+   - JWT 过期时间。
+   - 日志级别。
+   - 限流参数。
+
+5. 监控仪表盘：
+   - 在线客户端数。
+   - 运行中隧道数。
+   - 当前连接数。
+   - 累计连接数。
+   - 总上行/下行流量。
+   - 最近错误日志。
+
+6. 审计日志：
+   - 记录登录、退出、客户端授权、秘钥轮换、隧道增删改、隧道启停、配置修改、MCP 调用等关键操作。
+
+## 七、客户端 Web 管理控制台
+
+1. 登录功能：
+   - 账号密码登录。
+   - 登录成功后返回 JWT。
+   - 未登录或 JWT 失效时跳转登录页。
+
+2. 服务端连接管理：
+   - 支持新增、编辑、删除、启动、停止服务端连接。
+   - 字段包括服务端地址、客户端接入端口、是否启用 TLS、客户端秘钥、连接状态、备注。
+
+3. 本地隧道视图：
+   - 展示服务端下发或本地配置的隧道列表。
+   - 展示本地目标地址、本地目标端口、公网映射端口、运行状态、错误信息。
+
+4. 状态监控：
+   - 当前服务端连接状态。
+   - 最近心跳时间。
+   - 本地端口连接测试结果。
+   - 当前数据连接数。
+
+5. 审计日志：
+   - 记录登录、退出、服务端连接增删改、连接启停、配置修改、MCP 调用等关键操作。
+
+## 八、REST API 规范
+
+1. API 路径建议：
+   - 服务端 API 前缀：`/api/server/v1`。
+   - 客户端 API 前缀：`/api/client/v1`。
+
+2. 统一响应格式：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {},
+  "request_id": "uuid"
+}
+```
+
+3. 分页响应格式：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "items": [],
+    "total": 100,
+    "page": 1,
+    "page_size": 20
+  },
+  "request_id": "uuid"
+}
+```
+
+4. 常用错误码：
+   - `0`：成功。
+   - `40001`：参数错误。
+   - `40101`：未登录或 token 无效。
+   - `40301`：无权限。
+   - `40401`：资源不存在。
+   - `40901`：资源冲突，例如端口已占用。
+   - `42901`：请求过于频繁。
+   - `50001`：服务器内部错误。
+
+5. 服务端核心 API：
+   - `POST /auth/login`：登录。
+   - `POST /auth/refresh`：刷新 JWT。
+   - `GET /clients`：客户端列表。
+   - `POST /clients`：新增客户端授权。
+   - `PUT /clients/:id`：编辑客户端。
+   - `POST /clients/:id/enable`：启用客户端。
+   - `POST /clients/:id/disable`：禁用客户端。
+   - `POST /clients/:id/rotate-secret`：轮换客户端秘钥。
+   - `GET /tunnels`：隧道列表。
+   - `POST /tunnels`：新增隧道。
+   - `PUT /tunnels/:id`：编辑隧道。
+   - `DELETE /tunnels/:id`：删除隧道。
+   - `POST /tunnels/:id/start`：启动隧道。
+   - `POST /tunnels/:id/stop`：停止隧道。
+   - `GET /dashboard`：仪表盘。
+   - `GET /audit-logs`：审计日志。
+   - `GET /config`：系统配置。
+   - `PUT /config`：修改系统配置。
+
+6. 客户端核心 API：
+   - `POST /auth/login`：登录。
+   - `POST /auth/refresh`：刷新 JWT。
+   - `GET /servers`：服务端连接列表。
+   - `POST /servers`：新增服务端连接。
+   - `PUT /servers/:id`：编辑服务端连接。
+   - `DELETE /servers/:id`：删除服务端连接。
+   - `POST /servers/:id/start`：连接服务端。
+   - `POST /servers/:id/stop`：断开服务端。
+   - `GET /tunnels`：本地隧道状态。
+   - `GET /status`：本机运行状态。
+   - `GET /audit-logs`：审计日志。
+   - `GET /config`：客户端配置。
+   - `PUT /config`：修改客户端配置。
+
+## 九、登录安全与权限
+
+1. Web 登录：
+   - 前端密码使用 SM2 公钥加密后传输。
+   - 后端使用 SM2 私钥解密后验证。
+   - 数据库不保存明文密码，不保存可逆加密密码。
+   - 密码使用安全哈希算法存储，建议使用 bcrypt 或 argon2。
+
+2. JWT：
+   - 登录成功后签发 JWT。
+   - JWT 默认有效期 2 小时。
+   - 支持刷新令牌。
+   - 退出登录后前端清理 token。
+   - 后端管理接口必须校验 JWT。
+
+3. 客户端授权：
+   - 服务端生成客户端秘钥。
+   - 客户端连接服务端时必须携带秘钥。
+   - 服务端只允许授权状态为启用的客户端连接。
+   - 客户端被禁用后，已建立连接应被断开，新连接应被拒绝。
+
+4. TLS：
+   - 服务端配置项支持开启或关闭 TLS。
+   - 开启 TLS 时必须配置证书文件和私钥文件路径。
+   - 客户端服务端连接配置中需要声明是否使用 TLS。
+
+5. 限流：
+   - 登录接口需要限制同 IP 请求频率。
+   - 管理接口需要限制异常高频请求。
+   - 客户端认证失败次数过多时应短暂拒绝继续认证。
+
+## 十、SQLite 数据库设计
+
+### 10.1 通用用户表 `users`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| id | INTEGER PRIMARY KEY AUTOINCREMENT | 用户 ID |
+| username | TEXT UNIQUE NOT NULL | 用户名 |
+| password_hash | TEXT NOT NULL | 密码哈希 |
+| role | TEXT NOT NULL | 角色，默认 admin |
+| created_at | DATETIME NOT NULL | 创建时间 |
+| updated_at | DATETIME NOT NULL | 更新时间 |
+
+### 10.2 服务端客户端表 `clients`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| id | INTEGER PRIMARY KEY AUTOINCREMENT | 客户端 ID |
+| name | TEXT NOT NULL | 客户端名称 |
+| secret_hash | TEXT UNIQUE NOT NULL | 客户端秘钥哈希 |
+| secret_hint | TEXT NOT NULL | 秘钥摘要，用于展示 |
+| status | TEXT NOT NULL | enabled/disabled |
+| online_status | TEXT NOT NULL | online/offline |
+| last_ip | TEXT | 最近连接 IP |
+| last_seen_at | DATETIME | 最后在线时间 |
+| remark | TEXT | 备注 |
+| created_at | DATETIME NOT NULL | 创建时间 |
+| updated_at | DATETIME NOT NULL | 更新时间 |
+
+### 10.3 服务端隧道表 `tunnels`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| id | INTEGER PRIMARY KEY AUTOINCREMENT | 隧道 ID |
+| name | TEXT NOT NULL | 隧道名称 |
+| client_id | INTEGER NOT NULL | 客户端 ID |
+| protocol | TEXT NOT NULL | 首版固定 tcp |
+| local_host | TEXT NOT NULL | 客户端本地目标地址 |
+| local_port | INTEGER NOT NULL | 客户端本地目标端口 |
+| remote_host | TEXT NOT NULL | 服务端监听地址 |
+| remote_port | INTEGER UNIQUE NOT NULL | 公网映射端口 |
+| status | TEXT NOT NULL | stopped/starting/running/stopping/error |
+| auto_start | INTEGER NOT NULL | 是否自启动，0/1 |
+| last_error | TEXT | 最近错误 |
+| remark | TEXT | 备注 |
+| created_at | DATETIME NOT NULL | 创建时间 |
+| updated_at | DATETIME NOT NULL | 更新时间 |
+
+### 10.4 客户端服务端连接表 `server_connections`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| id | INTEGER PRIMARY KEY AUTOINCREMENT | 连接 ID |
+| name | TEXT NOT NULL | 连接名称 |
+| server_host | TEXT NOT NULL | 服务端地址 |
+| server_port | INTEGER NOT NULL | 客户端接入端口 |
+| use_tls | INTEGER NOT NULL | 是否使用 TLS，0/1 |
+| client_secret | TEXT NOT NULL | 客户端秘钥，需本地加密或限制文件权限 |
+| status | TEXT NOT NULL | stopped/connecting/connected/error |
+| auto_start | INTEGER NOT NULL | 是否自启动，0/1 |
+| last_error | TEXT | 最近错误 |
+| remark | TEXT | 备注 |
+| created_at | DATETIME NOT NULL | 创建时间 |
+| updated_at | DATETIME NOT NULL | 更新时间 |
+
+### 10.5 审计日志表 `audit_logs`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| id | INTEGER PRIMARY KEY AUTOINCREMENT | 日志 ID |
+| actor | TEXT NOT NULL | 操作人 |
+| action | TEXT NOT NULL | 操作类型 |
+| target_type | TEXT | 目标类型 |
+| target_id | TEXT | 目标 ID |
+| content | TEXT NOT NULL | 操作内容 |
+| ip | TEXT | 操作 IP |
+| created_at | DATETIME NOT NULL | 操作时间 |
+
+### 10.6 配置表 `settings`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| key | TEXT PRIMARY KEY | 配置键 |
+| value | TEXT NOT NULL | 配置值 |
+| updated_at | DATETIME NOT NULL | 更新时间 |
+
+### 10.7 流量统计表 `traffic_stats`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| id | INTEGER PRIMARY KEY AUTOINCREMENT | 统计 ID |
+| tunnel_id | INTEGER NOT NULL | 隧道 ID |
+| connection_count | INTEGER NOT NULL | 累计连接数 |
+| active_connections | INTEGER NOT NULL | 当前连接数 |
+| bytes_in | INTEGER NOT NULL | 上行字节数 |
+| bytes_out | INTEGER NOT NULL | 下行字节数 |
+| updated_at | DATETIME NOT NULL | 更新时间 |
+
+## 十一、MCP AI 扩展接口
+
+1. 服务端 MCP 服务能力：
+   - `server.list_clients`：查询客户端列表和在线状态。
+   - `server.get_client`：查询单个客户端详情。
+   - `server.list_tunnels`：查询隧道列表。
+   - `server.create_tunnel`：创建隧道。
+   - `server.start_tunnel`：启动隧道。
+   - `server.stop_tunnel`：停止隧道。
+   - `server.delete_tunnel`：删除隧道。
+   - `server.get_dashboard`：查询系统状态和流量统计。
+
+2. 客户端 MCP 服务能力：
+   - `client.list_servers`：查询服务端连接配置。
+   - `client.connect_server`：连接指定服务端。
+   - `client.disconnect_server`：断开指定服务端。
+   - `client.list_tunnels`：查询本地隧道状态。
+   - `client.get_network_status`：查询本机端口和网络状态。
+
+3. MCP 返回格式：
+
+```json
+{
+  "success": true,
+  "message": "ok",
+  "data": {}
+}
+```
+
+4. MCP 安全要求：
+   - MCP 接口必须有独立启停开关。
+   - MCP 接口必须复用管理权限校验或配置独立访问令牌。
+   - MCP 修改类操作必须写入审计日志。
+
+## 十二、配置、日志与部署
+
+1. 服务端默认端口：
+   - Web 管理端口：`8080`。
+   - 客户端控制连接接入端口：`7000`。
+   - 客户端数据连接接入端口：`7001`。
+   - 公网映射端口范围：`10000-60000`。
+
+2. 客户端默认端口：
+   - Web 管理端口：`18080`。
+   - MCP 服务端口：默认关闭，开启后由配置指定。
+
+3. 文件路径：
+   - 服务端配置文件：`nattserver/config/config.json`，显式指定时兼容 `nattserver/config/config.yaml`。
+   - 服务端数据库：`nattserver/data/nattserver.db`。
+   - 服务端日志目录：`nattserver/logs/`。
+   - 客户端配置文件：`nattuser/config/config.json`，显式指定时兼容 `nattuser/config/config.yaml`。
+   - 客户端数据库：`nattuser/data/nattuser.db`。
+   - 客户端日志目录：`nattuser/logs/`。
+
+4. 日志要求：
+   - 支持 `error`、`info`、`debug` 三个日志级别。
+   - 支持日志文件持久化。
+   - 支持按日期切分日志文件。
+   - 关键错误需要带 request_id、client_id、tunnel_id 或 connection_id。
+
+5. 配置热加载：
+   - Web 配置修改后应尽量热加载。
+   - 涉及监听端口、TLS 证书、数据库路径等无法安全热加载的配置，应提示需要重启。
+
+6. 跨平台构建：
+   - 支持 Windows、Linux、macOS。
+   - 输出原生二进制文件。
+   - 不依赖外部数据库服务。
+
+## 十三、验收标准
+
+1. 客户端可以使用授权秘钥成功连接服务端，并在服务端后台显示在线。
+
+2. 服务端创建 TCP 隧道后，公网端口可以访问客户端内网 TCP 服务。
+
+3. 多客户端、多隧道可以同时运行，互不影响。
+
+4. 客户端断线后，服务端后台能在超时时间后显示离线。
+
+5. 客户端恢复连接后，自启动隧道可以自动恢复运行。
+
+6. 停止或删除隧道后，服务端公网端口被释放。
+
+7. 禁用客户端后，客户端无法新建控制连接，已有连接会被断开。
+
+8. 服务端和客户端重启后，用户、配置、隧道、审计日志仍然存在。
+
+9. Web 登录、JWT 过期、JWT 刷新、接口鉴权、登录限流均按预期生效。
+
+10. 服务端 MCP 可以查询客户端、查询隧道、启停隧道、查询流量统计。
+
+11. 客户端 MCP 可以查询服务端连接、本地隧道状态和本机网络状态。
+
+12. 开启 TLS 后，客户端可以通过 TLS 成功连接服务端；关闭 TLS 后，开发环境可以正常明文连接。
+
+13. 端口冲突、客户端离线、本地服务不可达等异常情况会展示明确错误信息，并写入日志。
