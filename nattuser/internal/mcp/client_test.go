@@ -142,9 +142,13 @@ func setupClientMCPRouter(t *testing.T) (http.Handler, *sql.DB) {
 	t.Helper()
 
 	ctx := context.Background()
-	database, err := db.Open(ctx, filepath.Join(t.TempDir(), "client.db"), nil)
+	dir := t.TempDir()
+	database, err := db.Open(ctx, filepath.Join(dir, "client.db"), nil)
 	if err != nil {
 		t.Fatalf("open database: %v", err)
+	}
+	if err := db.ConfigureAuditLogDir(ctx, database, filepath.Join(dir, "logs")); err != nil {
+		t.Fatalf("configure audit log dir: %v", err)
 	}
 	if _, err := db.CreateServerConnection(ctx, database, db.CreateServerConnectionParams{
 		Name:         "mcp-server",
@@ -172,7 +176,7 @@ func callClientMCP(t *testing.T, handler http.Handler, token string, tool string
 	if err != nil {
 		t.Fatalf("encode request: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodPost, "/tools/call", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/mcp/tools/call", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)

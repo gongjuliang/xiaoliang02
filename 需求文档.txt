@@ -9,7 +9,7 @@
    - 支持多客户端、多隧道并发运行。
    - 支持服务端 Web 管理控制台。
    - 支持客户端 Web 管理控制台。
-   - 支持 SQLite 持久化配置、状态、审计日志和基础统计数据。
+   - 支持 SQLite 持久化用户、配置、状态和基础统计数据；审计日志写入 JSONL 文件并支持旧 SQLite 审计数据一次性迁移。
    - 支持 MCP AI 扩展接口，供 AI 工具查询和管理服务端/客户端状态。
 
 3. 首版暂不包含：
@@ -138,7 +138,7 @@ nattuser/
 
 1. 服务端启动隧道后，监听对应公网映射端口。
 
-2. 外部用户连接公网映射端口时，服务端生成 `connection_id`，通过控制连接向客户端发送 `data_open` 消息。
+2. 外部用户连接公网映射端口时，服务端生成 `connection_id`，通过控制连接向客户端发送 `data_open` 消息。`data_open` 只携带 `tunnel_id`、`connection_id`、`data_host`、`data_port` 等数据连接协商字段，不携带客户端本地目标地址和端口。
 
 3. 客户端收到 `data_open` 后，主动建立到服务端的数据连接，并携带：
    - 客户端秘钥。
@@ -147,9 +147,11 @@ nattuser/
 
 4. 服务端将公网访问连接与客户端数据连接绑定，开始双向复制 TCP 流量。
 
-5. 客户端数据连接建立后，连接本地内网地址和端口，并在本地连接与服务端数据连接之间双向转发流量。
+5. 客户端数据连接建立后，按 `server_connection_id + server_tunnel_id` 查询本地隧道绑定配置，连接本地内网地址和端口，并在本地连接与服务端数据连接之间双向转发流量。
 
-6. 任意一端连接关闭时，另一端同步关闭，并记录连接关闭原因。
+6. 客户端未配置对应本地隧道、绑定被禁用或本地服务不可达时，应通过 `data_close` 或 `tunnel_status` 向服务端返回明确错误，服务端在隧道状态和最近错误中展示。
+
+7. 任意一端连接关闭时，另一端同步关闭，并记录连接关闭原因。
 
 ### 4.3 协议帧格式
 
@@ -180,8 +182,6 @@ nattuser/
    - `name`：隧道名称。
    - `client_id`：关联客户端 ID。
    - `protocol`：协议类型，首版固定为 `tcp`。
-   - `local_host`：客户端本地目标地址，例如 `127.0.0.1`。
-   - `local_port`：客户端本地目标端口。
    - `remote_host`：服务端监听地址，默认 `0.0.0.0`。
    - `remote_port`：公网映射端口。
    - `status`：隧道状态。
@@ -190,24 +190,30 @@ nattuser/
    - `created_at`：创建时间。
    - `updated_at`：更新时间。
 
-2. 隧道状态：
+2. 本地目标归属：
+   - 服务端隧道只维护客户端 ID、公网监听地址/端口、状态、自启动、备注和流量统计。
+   - 客户端本地目标由 `nattuser` 的本地隧道绑定配置维护，字段包括 `server_connection_id`、`server_tunnel_id`、`local_host`、`local_port`、`enabled`、`last_error`、`remark`。
+   - 同一个客户端内 `server_connection_id + server_tunnel_id` 必须唯一。
+   - 已升级的旧服务端数据库中可保留历史 `local_host/local_port` 字段用于兼容，但新 API、前端、MCP 和转发逻辑不得依赖这些字段。
+
+3. 隧道状态：
    - `stopped`：已停止。
    - `starting`：启动中。
    - `running`：运行中。
    - `stopping`：停止中。
    - `error`：异常。
 
-3. 端口规则：
+4. 端口规则：
    - 同一服务端内 `remote_port` 必须唯一。
    - `remote_port` 被占用时，隧道启动失败并记录错误。
    - 删除或停止隧道后，服务端必须释放公网监听端口。
 
-4. 客户端离线规则：
+5. 客户端离线规则：
    - 客户端离线后，该客户端关联隧道状态显示为不可用。
    - 服务端可保留公网监听端口，但新连接应立即拒绝或返回连接失败。
    - 客户端恢复在线后，`auto_start=true` 的隧道自动恢复。
 
-5. 流量统计：
+6. 流量统计：
    - 按隧道统计总上行字节数、总下行字节数、当前连接数、累计连接数。
    - 统计数据用于服务端仪表盘和 MCP 查询。
 
@@ -227,6 +233,7 @@ nattuser/
 3. 隧道管理：
    - 支持新增、编辑、删除、启动、停止、查看状态。
    - 支持按客户端筛选隧道。
+   - 新增和编辑隧道时只配置客户端、公网监听地址/端口、自启动和备注，不配置客户端本地地址/端口。
    - 启动失败时展示失败原因。
 
 4. 系统配置：
@@ -262,8 +269,9 @@ nattuser/
    - 字段包括服务端地址、客户端接入端口、是否启用 TLS、客户端秘钥、连接状态、备注。
 
 3. 本地隧道视图：
-   - 展示服务端下发或本地配置的隧道列表。
-   - 展示本地目标地址、本地目标端口、公网映射端口、运行状态、错误信息。
+   - 展示本地隧道绑定列表。
+   - 支持新增、编辑、删除本地绑定，将服务端隧道 ID 绑定到本机 `local_host:local_port`。
+   - 展示服务端连接 ID、服务端隧道 ID、本地目标地址、本地目标端口、启用状态、运行状态和错误信息。
 
 4. 状态监控：
    - 当前服务端连接状态。
@@ -346,7 +354,10 @@ nattuser/
    - `DELETE /servers/:id`：删除服务端连接。
    - `POST /servers/:id/start`：连接服务端。
    - `POST /servers/:id/stop`：断开服务端。
-   - `GET /tunnels`：本地隧道状态。
+   - `GET /tunnels`：本地隧道绑定列表和状态。
+   - `POST /tunnels`：新增本地隧道绑定。
+   - `PUT /tunnels/:id`：编辑本地隧道绑定。
+   - `DELETE /tunnels/:id`：删除本地隧道绑定。
    - `GET /status`：本机运行状态。
    - `GET /audit-logs`：审计日志。
    - `GET /config`：客户端配置。
@@ -383,7 +394,7 @@ nattuser/
    - 管理接口需要限制异常高频请求。
    - 客户端认证失败次数过多时应短暂拒绝继续认证。
 
-## 十、SQLite 数据库设计
+## 十、SQLite 与审计文件存储设计
 
 ### 10.1 通用用户表 `users`
 
@@ -420,8 +431,6 @@ nattuser/
 | name | TEXT NOT NULL | 隧道名称 |
 | client_id | INTEGER NOT NULL | 客户端 ID |
 | protocol | TEXT NOT NULL | 首版固定 tcp |
-| local_host | TEXT NOT NULL | 客户端本地目标地址 |
-| local_port | INTEGER NOT NULL | 客户端本地目标端口 |
 | remote_host | TEXT NOT NULL | 服务端监听地址 |
 | remote_port | INTEGER UNIQUE NOT NULL | 公网映射端口 |
 | status | TEXT NOT NULL | stopped/starting/running/stopping/error |
@@ -430,6 +439,8 @@ nattuser/
 | remark | TEXT | 备注 |
 | created_at | DATETIME NOT NULL | 创建时间 |
 | updated_at | DATETIME NOT NULL | 更新时间 |
+
+说明：旧数据库中可保留 `local_host/local_port` 兼容字段，但新建和更新隧道时由服务端写入空值/默认值，业务逻辑不再读取这些字段。
 
 ### 10.4 客户端服务端连接表 `server_connections`
 
@@ -448,20 +459,42 @@ nattuser/
 | created_at | DATETIME NOT NULL | 创建时间 |
 | updated_at | DATETIME NOT NULL | 更新时间 |
 
-### 10.5 审计日志表 `audit_logs`
+### 10.5 客户端本地隧道绑定表 `local_tunnels`
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| id | INTEGER PRIMARY KEY AUTOINCREMENT | 日志 ID |
-| actor | TEXT NOT NULL | 操作人 |
-| action | TEXT NOT NULL | 操作类型 |
+| id | INTEGER PRIMARY KEY AUTOINCREMENT | 本地绑定 ID |
+| name | TEXT NOT NULL | 本地绑定名称 |
+| server_connection_id | INTEGER NOT NULL | 客户端本地的服务端连接 ID |
+| server_tunnel_id | INTEGER NOT NULL | 服务端隧道 ID |
+| local_host | TEXT NOT NULL | 本机或内网目标地址 |
+| local_port | INTEGER NOT NULL | 本机或内网目标端口 |
+| enabled | INTEGER NOT NULL | 是否启用，0/1 |
+| last_error | TEXT | 最近错误 |
+| remark | TEXT | 备注 |
+| created_at | DATETIME NOT NULL | 创建时间 |
+| updated_at | DATETIME NOT NULL | 更新时间 |
+
+约束：`server_connection_id + server_tunnel_id` 唯一，删除服务端连接时级联删除对应本地绑定。
+
+### 10.6 审计日志文件 `logs/audit/YYYY-MM-DD.jsonl`
+
+审计日志不再以 SQLite 作为主存储。服务端和客户端均按天追加 JSONL 文件，每行一条审计记录：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| id | INTEGER | 兼容展示 ID，文件写入时可按读取顺序生成 |
+| actor | TEXT | 操作人 |
+| action | TEXT | 操作类型 |
 | target_type | TEXT | 目标类型 |
 | target_id | TEXT | 目标 ID |
-| content | TEXT NOT NULL | 操作内容 |
+| content | TEXT | 操作内容 |
 | ip | TEXT | 操作 IP |
-| created_at | DATETIME NOT NULL | 操作时间 |
+| created_at | DATETIME | 操作时间 |
 
-### 10.6 配置表 `settings`
+首次启动时检测旧 SQLite `audit_logs` 表，将历史数据导出到 JSONL 文件，并在 `settings` 中写入迁移标记，避免重复导出。新审计日志只写 JSONL 文件，后台审计列表 API 读取 JSONL 分页返回。
+
+### 10.7 配置表 `settings`
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -469,7 +502,7 @@ nattuser/
 | value | TEXT NOT NULL | 配置值 |
 | updated_at | DATETIME NOT NULL | 更新时间 |
 
-### 10.7 流量统计表 `traffic_stats`
+### 10.8 流量统计表 `traffic_stats`
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -483,11 +516,17 @@ nattuser/
 
 ## 十一、MCP AI 扩展接口
 
+MCP 不再单独监听端口，和 Web/API 共用同一个 Gin HTTP 服务：
+
+- 健康检查：`GET /mcp/health`。
+- 工具调用：`POST /mcp/tools/call`。
+- `mcp.enabled` 和 `mcp.access_token` 保留；历史 `mcp.host/mcp.port` 仅兼容解析，不再生效。
+
 1. 服务端 MCP 服务能力：
    - `server.list_clients`：查询客户端列表和在线状态。
    - `server.get_client`：查询单个客户端详情。
    - `server.list_tunnels`：查询隧道列表。
-   - `server.create_tunnel`：创建隧道。
+   - `server.create_tunnel`：创建隧道，只接收客户端 ID、公网监听端口、自启动、备注等服务端字段。
    - `server.start_tunnel`：启动隧道。
    - `server.stop_tunnel`：停止隧道。
    - `server.delete_tunnel`：删除隧道。
@@ -497,7 +536,7 @@ nattuser/
    - `client.list_servers`：查询服务端连接配置。
    - `client.connect_server`：连接指定服务端。
    - `client.disconnect_server`：断开指定服务端。
-   - `client.list_tunnels`：查询本地隧道状态。
+   - `client.list_tunnels`：查询本地隧道绑定和状态。
    - `client.get_network_status`：查询本机端口和网络状态。
 
 3. MCP 返回格式：
@@ -525,27 +564,35 @@ nattuser/
 
 2. 客户端默认端口：
    - Web 管理端口：`18080`。
-   - MCP 服务端口：默认关闭，开启后由配置指定。
+   - MCP 不单独监听端口，启用后复用客户端 Web 管理端口下的 `/mcp/*` 路由。
 
 3. 文件路径：
    - 服务端配置文件：`nattserver/config/config.json`，显式指定时兼容 `nattserver/config/config.yaml`。
    - 服务端数据库：`nattserver/data/nattserver.db`。
    - 服务端日志目录：`nattserver/logs/`。
+   - 服务端审计日志目录：`nattserver/logs/audit/`。
    - 客户端配置文件：`nattuser/config/config.json`，显式指定时兼容 `nattuser/config/config.yaml`。
    - 客户端数据库：`nattuser/data/nattuser.db`。
    - 客户端日志目录：`nattuser/logs/`。
+   - 客户端审计日志目录：`nattuser/logs/audit/`。
 
 4. 日志要求：
    - 支持 `error`、`info`、`debug` 三个日志级别。
    - 支持日志文件持久化。
    - 支持按日期切分日志文件。
+   - 普通日志输出必须包含触发位置，例如 `internal/api/routes.go:42`。
    - 关键错误需要带 request_id、client_id、tunnel_id 或 connection_id。
 
-5. 配置热加载：
+5. MCP 路由：
+   - 服务端 MCP 地址：`http://<server-http-host>:<server-http-port>/mcp/tools/call`。
+   - 客户端 MCP 地址：`http://<client-http-host>:<client-http-port>/mcp/tools/call`。
+   - `mcp.host/mcp.port` 不再作为监听配置使用。
+
+6. 配置热加载：
    - Web 配置修改后应尽量热加载。
    - 涉及监听端口、TLS 证书、数据库路径等无法安全热加载的配置，应提示需要重启。
 
-6. 跨平台构建：
+7. 跨平台构建：
    - 支持 Windows、Linux、macOS。
    - 输出原生二进制文件。
    - 不依赖外部数据库服务。
@@ -554,7 +601,7 @@ nattuser/
 
 1. 客户端可以使用授权秘钥成功连接服务端，并在服务端后台显示在线。
 
-2. 服务端创建 TCP 隧道后，公网端口可以访问客户端内网 TCP 服务。
+2. 服务端创建 TCP 隧道、客户端创建对应本地隧道绑定后，公网端口可以访问客户端内网 TCP 服务。
 
 3. 多客户端、多隧道可以同时运行，互不影响。
 
@@ -566,14 +613,14 @@ nattuser/
 
 7. 禁用客户端后，客户端无法新建控制连接，已有连接会被断开。
 
-8. 服务端和客户端重启后，用户、配置、隧道、审计日志仍然存在。
+8. 服务端和客户端重启后，用户、配置、隧道、本地绑定、JSONL 审计日志仍然存在。
 
 9. Web 登录、JWT 过期、JWT 刷新、接口鉴权、登录限流均按预期生效。
 
-10. 服务端 MCP 可以查询客户端、查询隧道、启停隧道、查询流量统计。
+10. 服务端 MCP 可以在 HTTP 端口的 `/mcp/tools/call` 查询客户端、查询隧道、启停隧道、查询流量统计。
 
-11. 客户端 MCP 可以查询服务端连接、本地隧道状态和本机网络状态。
+11. 客户端 MCP 可以在 HTTP 端口的 `/mcp/tools/call` 查询服务端连接、本地隧道状态和本机网络状态。
 
 12. 开启 TLS 后，客户端可以通过 TLS 成功连接服务端；关闭 TLS 后，开发环境可以正常明文连接。
 
-13. 端口冲突、客户端离线、本地服务不可达等异常情况会展示明确错误信息，并写入日志。
+13. 端口冲突、客户端离线、缺少本地绑定、本地服务不可达等异常情况会展示明确错误信息，并写入包含 Go 文件名和行号的日志。

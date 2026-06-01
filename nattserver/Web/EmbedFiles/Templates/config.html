@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>配置</title>
+    <link rel="stylesheet" href="/static/layui/css/layui.css">
+    <link rel="stylesheet" href="/static/css/app.css">
+    <style>
+        body { min-height: auto; padding: 22px 24px; }
+        .config-list { display: grid; gap: 10px; }
+        .config-row { display: grid; grid-template-columns: 240px 1fr auto; gap: 8px; align-items: center; }
+    </style>
+</head>
+<body>
+<div id="content"></div>
+<script src="/static/js/jquery/jquery-3.6.0.min.js"></script>
+<script src="/static/layui/layui.js"></script>
+<script src="/static/js/app.js"></script>
+<script>
+if (NATT.requireAuth()) {
+    NATT.request("GET", "/config").then(function (d) {
+        var rows = (d.editable_keys || []).map(function (x) {
+            return '<div class="config-row"><code>' + NATT.escapeHtml(x.key) + '</code><input class="layui-input" data-key="' + NATT.escapeHtml(x.key) + '" placeholder="新值"><button class="layui-btn" type="button" data-save="' + NATT.escapeHtml(x.key) + '">保存</button></div>';
+        }).join("");
+        $("#content").html('<div class="panel"><h3>配置</h3><div class="config-list">' + rows + '</div></div>');
+    }).fail(NATT.showError);
+    $("#content").on("click", "button[data-save]", function () {
+        var k = $(this).data("save"), v = $('input[data-key="' + k + '"]').val();
+        var s = {}; s[k] = v;
+        NATT.request("PUT", "/config", { settings: s }).then(function () { layui.layer.msg("已保存"); }).fail(NATT.showError);
+    });
+}
+</script>
+</body>
+</html>

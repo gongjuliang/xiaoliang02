@@ -14,7 +14,6 @@ import (
 	"nattuser/internal/db"
 	"nattuser/internal/httpserver"
 	"nattuser/internal/logger"
-	"nattuser/internal/mcp"
 )
 
 func main() {
@@ -46,14 +45,7 @@ func main() {
 	httpServer := httpserver.New(cfg.HTTP, router, log)
 	controlManager := control.NewManager(cfg, database, log)
 
-	var mcpRunner func(context.Context) error
-	if cfg.MCP.Enabled {
-		mcpRouter := mcp.NewClientRouter(cfg.MCP, database, log)
-		mcpServer := httpserver.New(mcpHTTPConfig(cfg.MCP, cfg.HTTP), mcpRouter, log)
-		mcpRunner = mcpServer.Run
-	}
-
-	runners := buildServiceRunners(cfg.MCP.Enabled, httpServer.Run, controlManager.Run, mcpRunner)
+	runners := buildServiceRunners(httpServer.Run, controlManager.Run)
 	if err := runServices(ctx, log, runners...); err != nil {
 		log.Errorf("nattuser stopped with error: %v", err)
 		os.Exit(1)
@@ -65,18 +57,8 @@ func configFlagDefault() string {
 	return ""
 }
 
-func buildServiceRunners(mcpEnabled bool, httpRunner func(context.Context) error, controlRunner func(context.Context) error, mcpRunner func(context.Context) error) []func(context.Context) error {
-	runners := []func(context.Context) error{httpRunner, controlRunner}
-	if mcpEnabled && mcpRunner != nil {
-		runners = append(runners, mcpRunner)
-	}
-	return runners
-}
-
-func mcpHTTPConfig(mcpCfg config.MCPConfig, base config.HTTPConfig) config.HTTPConfig {
-	base.Host = mcpCfg.Host
-	base.Port = mcpCfg.Port
-	return base
+func buildServiceRunners(httpRunner func(context.Context) error, controlRunner func(context.Context) error) []func(context.Context) error {
+	return []func(context.Context) error{httpRunner, controlRunner}
 }
 
 func runServices(ctx context.Context, log *logger.Logger, runners ...func(context.Context) error) error {

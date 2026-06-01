@@ -61,6 +61,7 @@ type AuthRequest struct {
 type AuthResponse struct {
 	Success                  bool   `json:"success"`
 	ClientID                 int64  `json:"client_id,omitempty"`
+	TunnelID                 int64  `json:"tunnel_id,omitempty"`
 	ProtocolVersion          string `json:"protocol_version"`
 	HeartbeatIntervalSeconds int    `json:"heartbeat_interval_seconds"`
 	Message                  string `json:"message,omitempty"`
@@ -77,8 +78,8 @@ type HeartbeatAck struct {
 type DataOpen struct {
 	DataHost  string `json:"data_host,omitempty"`
 	DataPort  int    `json:"data_port,omitempty"`
-	LocalHost string `json:"local_host"`
-	LocalPort int    `json:"local_port"`
+	LocalHost string `json:"local_host,omitempty"`
+	LocalPort int    `json:"local_port,omitempty"`
 }
 
 type DataBind struct {

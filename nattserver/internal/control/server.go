@@ -45,7 +45,7 @@ type ServerOptions struct {
 }
 
 type clientConn struct {
-	clientID int64
+	tunnelID int64
 	conn     net.Conn
 	mu       sync.Mutex
 }
@@ -151,35 +151,35 @@ func (s *Server) serveData(ctx context.Context, listener net.Listener) error {
 	}
 }
 
-func (s *Server) SendToClient(clientID int64, message protocol.Message) error {
+func (s *Server) SendToClient(tunnelID int64, message protocol.Message) error {
 	s.mu.Lock()
-	client := s.active[clientID]
+	client := s.active[tunnelID]
 	s.mu.Unlock()
 	if client == nil {
-		return fmt.Errorf("client %d is not online", clientID)
+		return fmt.Errorf("tunnel %d is not online", tunnelID)
 	}
 	return client.write(message)
 }
 
-func (s *Server) DisconnectClient(clientID int64) {
+func (s *Server) DisconnectTunnel(tunnelID int64) {
 	s.mu.Lock()
-	client := s.active[clientID]
+	client := s.active[tunnelID]
 	if client != nil {
-		delete(s.active, clientID)
+		delete(s.active, tunnelID)
 	}
 	s.mu.Unlock()
 	if client != nil {
 		_ = client.conn.Close()
 	}
-	s.stopClientTunnels(clientID)
+	s.stopTunnelRuntime(tunnelID)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if err := db.MarkClientOffline(ctx, s.database, clientID); err != nil {
-		s.logError("mark disconnected client offline failed client_id=%d: %v", clientID, err)
+	if err := db.MarkTunnelKeyOffline(ctx, s.database, tunnelID); err != nil {
+		s.logError("mark disconnected tunnel offline failed tunnel_id=%d: %v", tunnelID, err)
 	}
-	if err := db.MarkClientTunnelsUnavailable(ctx, s.database, clientID, "client disconnected"); err != nil {
-		s.logError("mark disconnected client tunnels unavailable failed client_id=%d: %v", clientID, err)
+	if err := db.MarkTunnelUnavailable(ctx, s.database, tunnelID, "tunnel disconnected"); err != nil {
+		s.logError("mark disconnected tunnel unavailable failed tunnel_id=%d: %v", tunnelID, err)
 	}
 }
 
@@ -228,10 +228,10 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 		_ = writeWithDeadline(conn, protocol.NewErrorMessage(first.RequestID, protocol.CodeBadRequest, "invalid auth_request payload"))
 		return
 	}
-	client, err := db.AuthenticateClientSecret(ctx, s.database, authReq.ClientSecret)
+	key, err := db.AuthenticateTunnelSecret(ctx, s.database, authReq.ClientSecret)
 	if err != nil {
 		_ = writeWithDeadline(conn, protocol.NewErrorMessage(first.RequestID, protocol.CodeUnauthorized, "unauthorized"))
-		s.logError("client auth failed from %s: %v", conn.RemoteAddr().String(), err)
+		s.logError("tunnel auth failed from %s: %v", conn.RemoteAddr().String(), err)
 		return
 	}
 
@@ -239,19 +239,19 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	if remoteIP == "" {
 		remoteIP = conn.RemoteAddr().String()
 	}
-	if err := db.MarkClientOnline(ctx, s.database, client.ID, remoteIP); err != nil {
-		s.logError("mark client online failed client_id=%d: %v", client.ID, err)
+	if err := db.MarkTunnelKeyOnline(ctx, s.database, key.TunnelID, remoteIP); err != nil {
+		s.logError("mark tunnel online failed tunnel_id=%d: %v", key.TunnelID, err)
 	}
-	_ = writeWithDeadline(conn, authResponse(first.RequestID, true, client.ID, "ok"))
+	_ = writeWithDeadline(conn, authResponse(first.RequestID, true, key.TunnelID, "ok"))
 
-	active := &clientConn{clientID: client.ID, conn: conn}
+	active := &clientConn{tunnelID: key.TunnelID, conn: conn}
 	s.register(active)
-	defer s.unregister(client.ID, active)
-	s.startClientAutoStartTunnels(ctx, client.ID)
+	defer s.unregister(key.TunnelID, active)
+	s.startTunnelIfAutoStart(ctx, key.TunnelID)
 
 	_ = conn.SetDeadline(time.Time{})
 	if s.log != nil {
-		s.log.Infof("client control connected client_id=%d remote=%s", client.ID, conn.RemoteAddr().String())
+		s.log.Infof("tunnel control connected tunnel_id=%d remote=%s", key.TunnelID, conn.RemoteAddr().String())
 	}
 	missedHeartbeats := 0
 	for {
@@ -269,16 +269,16 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 				// misses mark the control connection dead and trigger cleanup.
 				missedHeartbeats++
 				if missedHeartbeats < s.options.HeartbeatMisses {
-					s.logError("control heartbeat timeout client_id=%d missed=%d", client.ID, missedHeartbeats)
+					s.logError("control heartbeat timeout tunnel_id=%d missed=%d", key.TunnelID, missedHeartbeats)
 					continue
 				}
 			}
-			s.logError("control connection closed client_id=%d: %v", client.ID, err)
+			s.logError("control connection closed tunnel_id=%d: %v", key.TunnelID, err)
 			return
 		}
 		missedHeartbeats = 0
 		if err := s.handleMessage(ctx, active, message); err != nil {
-			s.logError("handle control message failed client_id=%d request_id=%s: %v", client.ID, message.RequestID, err)
+			s.logError("handle control message failed tunnel_id=%d request_id=%s: %v", key.TunnelID, message.RequestID, err)
 			_ = active.write(protocol.NewErrorMessage(message.RequestID, protocol.CodeBadRequest, err.Error()))
 		}
 	}
@@ -287,10 +287,10 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 func (s *Server) handleMessage(ctx context.Context, client *clientConn, message protocol.Message) error {
 	switch message.Type {
 	case protocol.TypeHeartbeat:
-		if err := db.MarkClientHeartbeat(ctx, s.database, client.clientID); err != nil {
+		if err := db.MarkTunnelKeyHeartbeat(ctx, s.database, client.tunnelID); err != nil {
 			return err
 		}
-		ack, err := protocol.NewMessage(protocol.TypeHeartbeatAck, client.clientID, 0, "", protocol.HeartbeatAck{ServerTime: time.Now().Unix()})
+		ack, err := protocol.NewMessage(protocol.TypeHeartbeatAck, 0, client.tunnelID, "", protocol.HeartbeatAck{ServerTime: time.Now().Unix()})
 		if err != nil {
 			return err
 		}
@@ -316,41 +316,41 @@ func (s *Server) handleMessage(ctx context.Context, client *clientConn, message 
 
 func (s *Server) register(client *clientConn) {
 	s.mu.Lock()
-	old := s.active[client.clientID]
-	s.active[client.clientID] = client
+	old := s.active[client.tunnelID]
+	s.active[client.tunnelID] = client
 	s.mu.Unlock()
 	if old != nil {
 		_ = old.conn.Close()
 	}
 }
 
-func (s *Server) unregister(clientID int64, client *clientConn) {
+func (s *Server) unregister(tunnelID int64, client *clientConn) {
 	s.mu.Lock()
-	if s.active[clientID] == client {
-		delete(s.active, clientID)
+	if s.active[tunnelID] == client {
+		delete(s.active, tunnelID)
 	}
 	s.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if err := db.MarkClientOffline(ctx, s.database, clientID); err != nil {
-		s.logError("mark client offline failed client_id=%d: %v", clientID, err)
+	if err := db.MarkTunnelKeyOffline(ctx, s.database, tunnelID); err != nil {
+		s.logError("mark tunnel offline failed tunnel_id=%d: %v", tunnelID, err)
 	}
-	if err := db.MarkClientTunnelsUnavailable(ctx, s.database, clientID, "client control connection offline"); err != nil {
-		s.logError("mark client tunnels unavailable failed client_id=%d: %v", clientID, err)
+	if err := db.MarkTunnelUnavailable(ctx, s.database, tunnelID, "tunnel control connection offline"); err != nil {
+		s.logError("mark tunnel unavailable failed tunnel_id=%d: %v", tunnelID, err)
 	}
-	s.stopClientTunnels(clientID)
+	s.stopTunnelRuntime(tunnelID)
 }
 
-func (s *Server) startClientAutoStartTunnels(ctx context.Context, clientID int64) {
-	tunnels, err := db.ListAutoStartTunnelsByClient(ctx, s.database, clientID)
+func (s *Server) startTunnelIfAutoStart(ctx context.Context, tunnelID int64) {
+	tunnel, err := db.GetTunnelByID(ctx, s.database, tunnelID)
 	if err != nil {
-		s.logError("list auto-start tunnels failed client_id=%d: %v", clientID, err)
+		s.logError("load auto-start tunnel failed tunnel_id=%d: %v", tunnelID, err)
 		return
 	}
-	for _, tunnel := range tunnels {
+	if tunnel.AutoStart {
 		if _, err := s.StartTunnel(ctx, tunnel.ID); err != nil {
-			s.logError("start auto-start tunnel failed client_id=%d tunnel_id=%d: %v", clientID, tunnel.ID, err)
+			s.logError("start auto-start tunnel failed tunnel_id=%d: %v", tunnel.ID, err)
 		}
 	}
 }
@@ -367,10 +367,10 @@ func writeWithDeadline(conn net.Conn, message protocol.Message) error {
 	return protocol.WriteMessage(conn, message)
 }
 
-func authResponse(requestID string, success bool, clientID int64, message string) protocol.Message {
-	response, _ := protocol.NewMessage(protocol.TypeAuthResponse, clientID, 0, "", protocol.AuthResponse{
+func authResponse(requestID string, success bool, tunnelID int64, message string) protocol.Message {
+	response, _ := protocol.NewMessage(protocol.TypeAuthResponse, 0, tunnelID, "", protocol.AuthResponse{
 		Success:                  success,
-		ClientID:                 clientID,
+		TunnelID:                 tunnelID,
 		ProtocolVersion:          protocol.Version,
 		HeartbeatIntervalSeconds: int(heartbeatInterval.Seconds()),
 		Message:                  message,

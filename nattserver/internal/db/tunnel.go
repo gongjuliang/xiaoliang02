@@ -34,26 +34,16 @@ type UpdateTunnelParams struct {
 }
 
 func ListTunnels(ctx context.Context, database *sql.DB, clientID int64, limit int, offset int) ([]model.Tunnel, int64, error) {
-	where := ""
-	args := []any{}
-	if clientID > 0 {
-		where = "WHERE client_id = ?"
-		args = append(args, clientID)
-	}
-
 	var total int64
-	countQuery := "SELECT COUNT(1) FROM tunnels " + where
-	if err := database.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := database.QueryRowContext(ctx, "SELECT COUNT(1) FROM tunnels").Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count tunnels: %w", err)
 	}
 
-	queryArgs := append(args, limit, offset)
 	rows, err := database.QueryContext(ctx, `
-SELECT id, name, client_id, protocol, local_host, local_port, remote_host, remote_port, status, auto_start, last_error, remark, created_at, updated_at
+SELECT id, name, protocol, remote_host, remote_port, status, auto_start, last_error, remark, created_at, updated_at
 FROM tunnels
-`+where+`
 ORDER BY id DESC
-LIMIT ? OFFSET ?;`, queryArgs...)
+LIMIT ? OFFSET ?;`, limit, offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list tunnels: %w", err)
 	}
@@ -75,7 +65,7 @@ LIMIT ? OFFSET ?;`, queryArgs...)
 
 func GetTunnelByID(ctx context.Context, database *sql.DB, id int64) (model.Tunnel, error) {
 	row := database.QueryRowContext(ctx, `
-SELECT id, name, client_id, protocol, local_host, local_port, remote_host, remote_port, status, auto_start, last_error, remark, created_at, updated_at
+SELECT id, name, protocol, remote_host, remote_port, status, auto_start, last_error, remark, created_at, updated_at
 FROM tunnels
 WHERE id = ?;`, id)
 	tunnel, err := scanTunnel(row)
@@ -88,14 +78,15 @@ WHERE id = ?;`, id)
 	return tunnel, nil
 }
 
-func ListAutoStartTunnelsByClient(ctx context.Context, database *sql.DB, clientID int64) ([]model.Tunnel, error) {
+func ListAutoStartOnlineTunnels(ctx context.Context, database *sql.DB) ([]model.Tunnel, error) {
 	rows, err := database.QueryContext(ctx, `
-SELECT id, name, client_id, protocol, local_host, local_port, remote_host, remote_port, status, auto_start, last_error, remark, created_at, updated_at
-FROM tunnels
-WHERE client_id = ? AND auto_start = 1
-ORDER BY id ASC;`, clientID)
+SELECT t.id, t.name, t.protocol, t.remote_host, t.remote_port, t.status, t.auto_start, t.last_error, t.remark, t.created_at, t.updated_at
+FROM tunnels t
+JOIN tunnel_keys k ON k.tunnel_id = t.id
+WHERE t.auto_start = 1 AND k.status = 'enabled' AND k.online_status = 'online'
+ORDER BY t.id ASC;`)
 	if err != nil {
-		return nil, fmt.Errorf("list client auto-start tunnels: %w", err)
+		return nil, fmt.Errorf("list auto-start online tunnels: %w", err)
 	}
 	defer rows.Close()
 
@@ -113,6 +104,10 @@ ORDER BY id ASC;`, clientID)
 	return tunnels, nil
 }
 
+func ListAutoStartTunnelsByClient(ctx context.Context, database *sql.DB, clientID int64) ([]model.Tunnel, error) {
+	return ListAutoStartOnlineTunnels(ctx, database)
+}
+
 func CreateTunnel(ctx context.Context, database *sql.DB, params CreateTunnelParams) (model.Tunnel, error) {
 	tx, err := database.BeginTx(ctx, nil)
 	if err != nil {
@@ -121,13 +116,10 @@ func CreateTunnel(ctx context.Context, database *sql.DB, params CreateTunnelPara
 	defer tx.Rollback()
 
 	result, err := tx.ExecContext(ctx, `
-INSERT INTO tunnels(name, client_id, protocol, local_host, local_port, remote_host, remote_port, status, auto_start, remark)
-VALUES(?, ?, ?, ?, ?, ?, ?, 'stopped', ?, ?);`,
+INSERT INTO tunnels(name, protocol, remote_host, remote_port, status, auto_start, remark)
+VALUES(?, ?, ?, ?, 'stopped', ?, ?);`,
 		params.Name,
-		params.ClientID,
 		params.Protocol,
-		params.LocalHost,
-		params.LocalPort,
 		params.RemoteHost,
 		params.RemotePort,
 		boolToInt(params.AutoStart),
@@ -154,13 +146,10 @@ VALUES(?, 0, 0, 0, 0);`, id); err != nil {
 func UpdateTunnel(ctx context.Context, database *sql.DB, id int64, params UpdateTunnelParams) (model.Tunnel, error) {
 	result, err := database.ExecContext(ctx, `
 UPDATE tunnels
-SET name = ?, client_id = ?, protocol = ?, local_host = ?, local_port = ?, remote_host = ?, remote_port = ?, auto_start = ?, remark = ?, last_error = NULL
+SET name = ?, protocol = ?, remote_host = ?, remote_port = ?, auto_start = ?, remark = ?, last_error = NULL
 WHERE id = ?;`,
 		params.Name,
-		params.ClientID,
 		params.Protocol,
-		params.LocalHost,
-		params.LocalPort,
 		params.RemoteHost,
 		params.RemotePort,
 		boolToInt(params.AutoStart),
@@ -230,10 +219,7 @@ func scanTunnel(scanner tunnelScanner) (model.Tunnel, error) {
 	err := scanner.Scan(
 		&tunnel.ID,
 		&tunnel.Name,
-		&tunnel.ClientID,
 		&tunnel.Protocol,
-		&tunnel.LocalHost,
-		&tunnel.LocalPort,
 		&tunnel.RemoteHost,
 		&tunnel.RemotePort,
 		&tunnel.Status,

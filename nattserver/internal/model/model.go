@@ -20,6 +20,13 @@ const (
 	OnlineStatusOffline OnlineStatus = "offline"
 )
 
+type TunnelKeyStatus string
+
+const (
+	TunnelKeyStatusEnabled  TunnelKeyStatus = "enabled"
+	TunnelKeyStatusDisabled TunnelKeyStatus = "disabled"
+)
+
 type TunnelProtocol string
 
 const (
@@ -62,10 +69,10 @@ type Client struct {
 type Tunnel struct {
 	ID         int64          `json:"id"`
 	Name       string         `json:"name"`
-	ClientID   int64          `json:"client_id"`
+	ClientID   int64          `json:"-"`
 	Protocol   TunnelProtocol `json:"protocol"`
-	LocalHost  string         `json:"local_host"`
-	LocalPort  int            `json:"local_port"`
+	LocalHost  string         `json:"-"`
+	LocalPort  int            `json:"-"`
 	RemoteHost string         `json:"remote_host"`
 	RemotePort int            `json:"remote_port"`
 	Status     TunnelStatus   `json:"status"`
@@ -74,6 +81,24 @@ type Tunnel struct {
 	Remark     string         `json:"remark"`
 	CreatedAt  string         `json:"created_at"`
 	UpdatedAt  string         `json:"updated_at"`
+}
+
+type TunnelKey struct {
+	ID           int64           `json:"id"`
+	TunnelID     int64           `json:"tunnel_id"`
+	SecretHash   string          `json:"-"`
+	SecretHint   string          `json:"secret_hint"`
+	Status       TunnelKeyStatus `json:"status"`
+	OnlineStatus OnlineStatus    `json:"online_status"`
+	LastIP       string          `json:"last_ip"`
+	LastSeenAt   string          `json:"last_seen_at"`
+	CreatedAt    string          `json:"created_at"`
+	UpdatedAt    string          `json:"updated_at"`
+}
+
+type TunnelWithKey struct {
+	Tunnel
+	Key *TunnelKey `json:"key,omitempty"`
 }
 
 type AuditLog struct {

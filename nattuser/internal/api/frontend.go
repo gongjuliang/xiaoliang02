@@ -25,4 +25,22 @@ func registerFrontendRoutes(router *gin.Engine) {
 	router.GET("/index.html", func(c *gin.Context) {
 		c.HTML(http.StatusOK, "index.html", nil)
 	})
+	router.GET("/login.html", func(c *gin.Context) {
+		c.HTML(http.StatusOK, "login.html", nil)
+	})
+	for _, page := range []struct {
+		Path     string
+		Template string
+	}{
+		{Path: "/dashboard.html", Template: "dashboard.html"},
+		{Path: "/tunnels.html", Template: "tunnels.html"},
+		{Path: "/config.html", Template: "config.html"},
+		{Path: "/mcp.html", Template: "mcp.html"},
+		{Path: "/audit.html", Template: "audit.html"},
+	} {
+		p := page
+		router.GET(p.Path, func(c *gin.Context) {
+			c.HTML(http.StatusOK, p.Template, nil)
+		})
+	}
 }

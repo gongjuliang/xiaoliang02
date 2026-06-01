@@ -23,7 +23,7 @@ type Config struct {
 	Log            LogConfig            `yaml:"log" json:"log"`
 	Auth           AuthConfig           `yaml:"auth" json:"auth"`
 	ServerDefaults ServerDefaultsConfig `yaml:"server_defaults" json:"server_defaults"`
-	MCP            MCPConfig            `yaml:"mcp" json:"mcp"`
+	MCP            MCPConfig            `yaml:"-" json:"-"`
 }
 
 type AppConfig struct {
@@ -68,10 +68,10 @@ type ServerDefaultsConfig struct {
 }
 
 type MCPConfig struct {
-	Enabled     bool   `yaml:"enabled" json:"enabled"`
-	Host        string `yaml:"host" json:"host"`
-	Port        int    `yaml:"port" json:"port"`
-	AccessToken string `yaml:"access_token" json:"access_token"`
+	Enabled     bool   `yaml:"-" json:"-"`
+	Host        string `yaml:"-" json:"-"`
+	Port        int    `yaml:"-" json:"-"`
+	AccessToken string `yaml:"-" json:"-"`
 }
 
 func Load(path string) (*Config, error) {
@@ -159,11 +159,6 @@ func Default() *Config {
 			DataPort:    7001,
 			UseTLS:      false,
 		},
-		MCP: MCPConfig{
-			Enabled: false,
-			Host:    "127.0.0.1",
-			Port:    18081,
-		},
 	}
 }
 
@@ -206,17 +201,6 @@ func (c *Config) Validate() error {
 	}
 	if !validPort(c.ServerDefaults.DataPort) {
 		return fmt.Errorf("server_defaults.data_port must be between 1 and 65535")
-	}
-	if c.MCP.Enabled && !validPort(c.MCP.Port) {
-		return fmt.Errorf("mcp.port must be between 1 and 65535 when MCP is enabled")
-	}
-	if c.MCP.Enabled {
-		if c.MCP.Host == "" {
-			return fmt.Errorf("mcp.host is required when MCP is enabled")
-		}
-		if c.MCP.AccessToken == "" {
-			return fmt.Errorf("mcp.access_token is required when MCP is enabled")
-		}
 	}
 	return nil
 }

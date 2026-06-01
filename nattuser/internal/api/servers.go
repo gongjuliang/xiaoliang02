@@ -30,6 +30,8 @@ type serverConnectionRequest struct {
 	DataPort     int    `json:"data_port"`
 	UseTLS       *bool  `json:"use_tls"`
 	ClientSecret string `json:"client_secret" binding:"required"`
+	LocalHost    string `json:"local_host" binding:"required"`
+	LocalPort    int    `json:"local_port" binding:"required"`
 	AutoStart    bool   `json:"auto_start"`
 	Remark       string `json:"remark"`
 }
@@ -43,12 +45,12 @@ func NewServerHandler(database *sql.DB, log *logger.Logger, defaults *config.Ser
 }
 
 func (h *ServerHandler) RegisterRoutes(group *gin.RouterGroup) {
-	group.GET("/servers", h.list)
-	group.POST("/servers", h.create)
-	group.PUT("/servers/:id", h.update)
-	group.DELETE("/servers/:id", h.delete)
-	group.POST("/servers/:id/start", h.start)
-	group.POST("/servers/:id/stop", h.stop)
+	group.GET("/tunnel-connections", h.list)
+	group.POST("/tunnel-connections", h.create)
+	group.PUT("/tunnel-connections/:id", h.update)
+	group.DELETE("/tunnel-connections/:id", h.delete)
+	group.POST("/tunnel-connections/:id/start", h.start)
+	group.POST("/tunnel-connections/:id/stop", h.stop)
 }
 
 func (h *ServerHandler) list(c *gin.Context) {
@@ -78,6 +80,8 @@ func (h *ServerHandler) create(c *gin.Context) {
 		DataPort:     req.DataPort,
 		UseTLS:       h.resolveUseTLS(req.UseTLS),
 		ClientSecret: req.ClientSecret,
+		LocalHost:    req.LocalHost,
+		LocalPort:    req.LocalPort,
 		AutoStart:    req.AutoStart,
 		Remark:       req.Remark,
 	})
@@ -105,6 +109,8 @@ func (h *ServerHandler) update(c *gin.Context) {
 		DataPort:     req.DataPort,
 		UseTLS:       h.resolveUseTLS(req.UseTLS),
 		ClientSecret: req.ClientSecret,
+		LocalHost:    req.LocalHost,
+		LocalPort:    req.LocalPort,
 		AutoStart:    req.AutoStart,
 		Remark:       req.Remark,
 	})
@@ -160,6 +166,7 @@ func (h *ServerHandler) bindAndValidate(c *gin.Context, req *serverConnectionReq
 	req.Name = strings.TrimSpace(req.Name)
 	req.ServerHost = strings.TrimSpace(req.ServerHost)
 	req.ClientSecret = strings.TrimSpace(req.ClientSecret)
+	req.LocalHost = strings.TrimSpace(req.LocalHost)
 	if req.ServerHost == "" {
 		req.ServerHost = h.defaults.ServerHost
 	}
@@ -181,6 +188,10 @@ func (h *ServerHandler) bindAndValidate(c *gin.Context, req *serverConnectionReq
 		Fail(c, http.StatusBadRequest, CodeBadRequest, "data_port must be between 1 and 65535")
 	case req.ClientSecret == "":
 		Fail(c, http.StatusBadRequest, CodeBadRequest, "client_secret is required")
+	case req.LocalHost == "":
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "local_host is required")
+	case !validPort(req.LocalPort):
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "local_port must be between 1 and 65535")
 	default:
 		return true
 	}

@@ -2,11 +2,13 @@ package api
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"nattserver/internal/auth"
 	"nattserver/internal/config"
 	"nattserver/internal/db"
 	"nattserver/internal/logger"
@@ -44,6 +46,9 @@ func (h *OpsHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.GET("/audit-logs", h.auditLogs)
 	group.GET("/config", h.getConfig)
 	group.PUT("/config", h.updateConfig)
+	group.GET("/mcp-config", h.getMCPConfig)
+	group.PUT("/mcp-config", h.updateMCPConfig)
+	group.POST("/mcp-config/rotate-token", h.rotateMCPToken)
 }
 
 func (h *OpsHandler) dashboard(c *gin.Context) {
@@ -245,4 +250,75 @@ func validateRestartSetting(key string, value string) error {
 		}
 	}
 	return nil
+}
+
+type mcpConfigRequest struct {
+	Enabled     bool   `json:"enabled"`
+	AccessToken string `json:"access_token"`
+}
+
+func (h *OpsHandler) getMCPConfig(c *gin.Context) {
+	enabledValue, err := db.GetSetting(c.Request.Context(), h.database, "mcp.enabled")
+	if err != nil && !errors.Is(err, db.ErrNotFound) {
+		h.writeError(c, err, "load mcp config failed")
+		return
+	}
+	token, err := db.GetSetting(c.Request.Context(), h.database, "mcp.access_token")
+	if err != nil && !errors.Is(err, db.ErrNotFound) {
+		h.writeError(c, err, "load mcp token failed")
+		return
+	}
+	enabled, _ := strconv.ParseBool(enabledValue)
+	OK(c, gin.H{
+		"enabled":           enabled,
+		"access_token_hint": auth.SecretHint(token),
+		"has_access_token":  strings.TrimSpace(token) != "",
+	})
+}
+
+func (h *OpsHandler) updateMCPConfig(c *gin.Context) {
+	var req mcpConfigRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "invalid mcp config")
+		return
+	}
+	token := strings.TrimSpace(req.AccessToken)
+	if req.Enabled && token == "" {
+		existing, err := db.GetSetting(c.Request.Context(), h.database, "mcp.access_token")
+		if err != nil && !errors.Is(err, db.ErrNotFound) {
+			h.writeError(c, err, "load mcp token failed")
+			return
+		}
+		token = strings.TrimSpace(existing)
+	}
+	if req.Enabled && token == "" {
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "access_token is required when mcp is enabled")
+		return
+	}
+	if err := db.UpsertSetting(c.Request.Context(), h.database, "mcp.enabled", strconv.FormatBool(req.Enabled)); err != nil {
+		h.writeError(c, err, "save mcp enabled failed")
+		return
+	}
+	if strings.TrimSpace(req.AccessToken) != "" {
+		if err := db.UpsertSetting(c.Request.Context(), h.database, "mcp.access_token", token); err != nil {
+			h.writeError(c, err, "save mcp token failed")
+			return
+		}
+	}
+	_ = db.InsertAuditLog(c.Request.Context(), h.database, currentActor(c), "mcp_config_update", "mcp", "server", "updated mcp config", c.ClientIP())
+	OK(c, gin.H{"enabled": req.Enabled, "access_token_hint": auth.SecretHint(token), "has_access_token": token != ""})
+}
+
+func (h *OpsHandler) rotateMCPToken(c *gin.Context) {
+	token, err := auth.GenerateClientSecret()
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, CodeInternalError, "generate mcp token failed")
+		return
+	}
+	if err := db.UpsertSetting(c.Request.Context(), h.database, "mcp.access_token", token); err != nil {
+		h.writeError(c, err, "save mcp token failed")
+		return
+	}
+	_ = db.InsertAuditLog(c.Request.Context(), h.database, currentActor(c), "mcp_token_rotate", "mcp", "server", "rotated mcp token", c.ClientIP())
+	OK(c, gin.H{"access_token": token, "access_token_hint": auth.SecretHint(token)})
 }

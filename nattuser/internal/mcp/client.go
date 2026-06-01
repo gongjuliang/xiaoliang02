@@ -20,7 +20,6 @@ import (
 )
 
 type clientHandler struct {
-	cfg      config.MCPConfig
 	database *sql.DB
 	log      *logger.Logger
 }
@@ -81,29 +80,28 @@ type localTunnelStatus struct {
 func NewClientRouter(cfg config.MCPConfig, database *sql.DB, log *logger.Logger) *gin.Engine {
 	router := gin.New()
 	router.Use(gin.Recovery())
-
-	handler := &clientHandler{
-		cfg:      cfg,
-		database: database,
-		log:      log,
-	}
-
-	router.GET("/health", func(c *gin.Context) {
-		writeOK(c, gin.H{"status": "ok"})
-	})
-
-	if cfg.Enabled {
-		protected := router.Group("")
-		// MCP is intentionally a narrow local operator API: one bearer token gates
-		// all tools, and mutating server-connection tools still write audit logs.
-		protected.Use(tokenAuthMiddleware(cfg.AccessToken))
-		protected.POST("/tools/call", handler.callTool)
-	}
+	RegisterClientRoutes(router, database, log)
 
 	router.NoRoute(func(c *gin.Context) {
 		writeFail(c, http.StatusNotFound, "resource not found")
 	})
 	return router
+}
+
+func RegisterClientRoutes(router *gin.Engine, database *sql.DB, log *logger.Logger) {
+	handler := &clientHandler{
+		database: database,
+		log:      log,
+	}
+
+	group := router.Group("/mcp")
+	group.GET("/health", func(c *gin.Context) {
+		writeOK(c, gin.H{"status": "ok"})
+	})
+
+	protected := group.Group("")
+	protected.Use(tokenAuthMiddleware(database))
+	protected.POST("/tools/call", handler.callTool)
 }
 
 func (h *clientHandler) callTool(c *gin.Context) {
@@ -116,14 +114,12 @@ func (h *clientHandler) callTool(c *gin.Context) {
 	// Dispatch is explicit rather than reflective, which keeps the MCP surface
 	// limited to the documented client.* tools.
 	switch strings.TrimSpace(req.Tool) {
-	case "client.list_servers":
+	case "client.list_tunnel_connections":
 		h.listServers(c, req.Params)
-	case "client.connect_server":
+	case "client.connect_tunnel":
 		h.connectServer(c, req.Params)
-	case "client.disconnect_server":
+	case "client.disconnect_tunnel":
 		h.disconnectServer(c, req.Params)
-	case "client.list_tunnels":
-		h.listTunnels(c, req.Params)
 	case "client.get_network_status":
 		h.getNetworkStatus(c)
 	default:
@@ -255,9 +251,30 @@ func collectNetworkStatus() (networkStatus, error) {
 	return networkStatus{Hostname: hostname, Interfaces: interfaces}, nil
 }
 
-func tokenAuthMiddleware(accessToken string) gin.HandlerFunc {
+func tokenAuthMiddleware(database *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if accessToken == "" || extractToken(c) != accessToken {
+		enabled, err := db.GetSetting(c.Request.Context(), database, "mcp.enabled")
+		if errors.Is(err, db.ErrNotFound) || !strings.EqualFold(enabled, "true") {
+			writeFail(c, http.StatusForbidden, "mcp disabled")
+			c.Abort()
+			return
+		}
+		if err != nil {
+			writeFail(c, http.StatusInternalServerError, "load mcp settings failed")
+			c.Abort()
+			return
+		}
+		accessToken, err := db.GetSetting(c.Request.Context(), database, "mcp.access_token")
+		if err != nil {
+			if errors.Is(err, db.ErrNotFound) {
+				writeFail(c, http.StatusUnauthorized, "unauthorized")
+			} else {
+				writeFail(c, http.StatusInternalServerError, "load mcp settings failed")
+			}
+			c.Abort()
+			return
+		}
+		if strings.TrimSpace(accessToken) == "" || extractToken(c) != accessToken {
 			writeFail(c, http.StatusUnauthorized, "unauthorized")
 			c.Abort()
 			return

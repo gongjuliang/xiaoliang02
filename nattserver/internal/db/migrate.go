@@ -35,27 +35,10 @@ CREATE TABLE IF NOT EXISTS users (
 	updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE TABLE IF NOT EXISTS clients (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	name TEXT NOT NULL,
-	secret_hash TEXT UNIQUE NOT NULL,
-	secret_hint TEXT NOT NULL,
-	status TEXT NOT NULL DEFAULT 'enabled',
-	online_status TEXT NOT NULL DEFAULT 'offline',
-	last_ip TEXT,
-	last_seen_at DATETIME,
-	remark TEXT,
-	created_at DATETIME NOT NULL DEFAULT (datetime('now')),
-	updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
-);
-
 CREATE TABLE IF NOT EXISTS tunnels (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	name TEXT NOT NULL,
-	client_id INTEGER NOT NULL,
 	protocol TEXT NOT NULL DEFAULT 'tcp',
-	local_host TEXT NOT NULL,
-	local_port INTEGER NOT NULL,
 	remote_host TEXT NOT NULL DEFAULT '0.0.0.0',
 	remote_port INTEGER UNIQUE NOT NULL,
 	status TEXT NOT NULL DEFAULT 'stopped',
@@ -63,8 +46,21 @@ CREATE TABLE IF NOT EXISTS tunnels (
 	last_error TEXT,
 	remark TEXT,
 	created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+	updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS tunnel_keys (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	tunnel_id INTEGER UNIQUE NOT NULL,
+	secret_hash TEXT UNIQUE NOT NULL,
+	secret_hint TEXT NOT NULL,
+	status TEXT NOT NULL DEFAULT 'enabled',
+	online_status TEXT NOT NULL DEFAULT 'offline',
+	last_ip TEXT,
+	last_seen_at DATETIME,
+	created_at DATETIME NOT NULL DEFAULT (datetime('now')),
 	updated_at DATETIME NOT NULL DEFAULT (datetime('now')),
-	FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+	FOREIGN KEY (tunnel_id) REFERENCES tunnels(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS audit_logs (
@@ -96,8 +92,7 @@ CREATE TABLE IF NOT EXISTS traffic_stats (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_traffic_stats_tunnel_id ON traffic_stats(tunnel_id);
-CREATE INDEX IF NOT EXISTS idx_clients_online_status ON clients(online_status);
-CREATE INDEX IF NOT EXISTS idx_tunnels_client_id ON tunnels(client_id);
+CREATE INDEX IF NOT EXISTS idx_tunnel_keys_online_status ON tunnel_keys(online_status);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);
 
 CREATE TRIGGER IF NOT EXISTS trg_users_updated_at
@@ -108,12 +103,12 @@ BEGIN
 	UPDATE users SET updated_at = datetime('now') WHERE id = OLD.id;
 END;
 
-CREATE TRIGGER IF NOT EXISTS trg_clients_updated_at
-AFTER UPDATE ON clients
+CREATE TRIGGER IF NOT EXISTS trg_tunnel_keys_updated_at
+AFTER UPDATE ON tunnel_keys
 FOR EACH ROW
 WHEN NEW.updated_at = OLD.updated_at
 BEGIN
-	UPDATE clients SET updated_at = datetime('now') WHERE id = OLD.id;
+	UPDATE tunnel_keys SET updated_at = datetime('now') WHERE id = OLD.id;
 END;
 
 CREATE TRIGGER IF NOT EXISTS trg_tunnels_updated_at
@@ -130,6 +125,82 @@ FOR EACH ROW
 WHEN NEW.updated_at = OLD.updated_at
 BEGIN
 	UPDATE settings SET updated_at = datetime('now') WHERE key = OLD.key;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_traffic_stats_updated_at
+AFTER UPDATE ON traffic_stats
+FOR EACH ROW
+WHEN NEW.updated_at = OLD.updated_at
+BEGIN
+	UPDATE traffic_stats SET updated_at = datetime('now') WHERE id = OLD.id;
+END;
+`,
+	},
+	{
+		Version: 2,
+		Name:    "reset_to_tunnel_key_model",
+		SQL: `
+DROP TABLE IF EXISTS traffic_stats;
+DROP TABLE IF EXISTS tunnel_keys;
+DROP TABLE IF EXISTS tunnels;
+DROP TABLE IF EXISTS clients;
+
+CREATE TABLE tunnels (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	name TEXT NOT NULL,
+	protocol TEXT NOT NULL DEFAULT 'tcp',
+	remote_host TEXT NOT NULL DEFAULT '0.0.0.0',
+	remote_port INTEGER UNIQUE NOT NULL,
+	status TEXT NOT NULL DEFAULT 'stopped',
+	auto_start INTEGER NOT NULL DEFAULT 0,
+	last_error TEXT,
+	remark TEXT,
+	created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+	updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE tunnel_keys (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	tunnel_id INTEGER UNIQUE NOT NULL,
+	secret_hash TEXT UNIQUE NOT NULL,
+	secret_hint TEXT NOT NULL,
+	status TEXT NOT NULL DEFAULT 'enabled',
+	online_status TEXT NOT NULL DEFAULT 'offline',
+	last_ip TEXT,
+	last_seen_at DATETIME,
+	created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+	updated_at DATETIME NOT NULL DEFAULT (datetime('now')),
+	FOREIGN KEY (tunnel_id) REFERENCES tunnels(id) ON DELETE CASCADE
+);
+
+CREATE TABLE traffic_stats (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	tunnel_id INTEGER NOT NULL,
+	connection_count INTEGER NOT NULL DEFAULT 0,
+	active_connections INTEGER NOT NULL DEFAULT 0,
+	bytes_in INTEGER NOT NULL DEFAULT 0,
+	bytes_out INTEGER NOT NULL DEFAULT 0,
+	updated_at DATETIME NOT NULL DEFAULT (datetime('now')),
+	FOREIGN KEY (tunnel_id) REFERENCES tunnels(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_traffic_stats_tunnel_id ON traffic_stats(tunnel_id);
+CREATE INDEX IF NOT EXISTS idx_tunnel_keys_online_status ON tunnel_keys(online_status);
+
+CREATE TRIGGER IF NOT EXISTS trg_tunnels_updated_at
+AFTER UPDATE ON tunnels
+FOR EACH ROW
+WHEN NEW.updated_at = OLD.updated_at
+BEGIN
+	UPDATE tunnels SET updated_at = datetime('now') WHERE id = OLD.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_tunnel_keys_updated_at
+AFTER UPDATE ON tunnel_keys
+FOR EACH ROW
+WHEN NEW.updated_at = OLD.updated_at
+BEGIN
+	UPDATE tunnel_keys SET updated_at = datetime('now') WHERE id = OLD.id;
 END;
 
 CREATE TRIGGER IF NOT EXISTS trg_traffic_stats_updated_at

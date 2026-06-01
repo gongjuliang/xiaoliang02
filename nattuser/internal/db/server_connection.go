@@ -17,6 +17,8 @@ type CreateServerConnectionParams struct {
 	DataPort     int
 	UseTLS       bool
 	ClientSecret string
+	LocalHost    string
+	LocalPort    int
 	AutoStart    bool
 	Remark       string
 }
@@ -28,19 +30,21 @@ type UpdateServerConnectionParams struct {
 	DataPort     int
 	UseTLS       bool
 	ClientSecret string
+	LocalHost    string
+	LocalPort    int
 	AutoStart    bool
 	Remark       string
 }
 
 func ListServerConnections(ctx context.Context, database *sql.DB, limit int, offset int) ([]model.ServerConnection, int64, error) {
 	var total int64
-	if err := database.QueryRowContext(ctx, "SELECT COUNT(1) FROM server_connections").Scan(&total); err != nil {
+	if err := database.QueryRowContext(ctx, "SELECT COUNT(1) FROM tunnel_connections").Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count server connections: %w", err)
 	}
 
 	rows, err := database.QueryContext(ctx, `
-SELECT id, name, server_host, server_port, data_port, use_tls, client_secret, status, auto_start, last_error, remark, created_at, updated_at
-FROM server_connections
+SELECT id, name, server_host, server_port, data_port, use_tls, client_secret, local_host, local_port, status, auto_start, last_error, remark, created_at, updated_at
+FROM tunnel_connections
 ORDER BY id DESC
 LIMIT ? OFFSET ?;`, limit, offset)
 	if err != nil {
@@ -64,8 +68,8 @@ LIMIT ? OFFSET ?;`, limit, offset)
 
 func ListControlServerConnections(ctx context.Context, database *sql.DB) ([]model.ServerConnection, error) {
 	rows, err := database.QueryContext(ctx, `
-SELECT id, name, server_host, server_port, data_port, use_tls, client_secret, status, auto_start, last_error, remark, created_at, updated_at
-FROM server_connections
+SELECT id, name, server_host, server_port, data_port, use_tls, client_secret, local_host, local_port, status, auto_start, last_error, remark, created_at, updated_at
+FROM tunnel_connections
 WHERE auto_start = 1 OR status IN ('connecting', 'connected', 'error')
 ORDER BY id ASC;`)
 	if err != nil {
@@ -89,8 +93,8 @@ ORDER BY id ASC;`)
 
 func GetServerConnectionByID(ctx context.Context, database *sql.DB, id int64) (model.ServerConnection, error) {
 	row := database.QueryRowContext(ctx, `
-SELECT id, name, server_host, server_port, data_port, use_tls, client_secret, status, auto_start, last_error, remark, created_at, updated_at
-FROM server_connections
+SELECT id, name, server_host, server_port, data_port, use_tls, client_secret, local_host, local_port, status, auto_start, last_error, remark, created_at, updated_at
+FROM tunnel_connections
 WHERE id = ?;`, id)
 	connection, err := scanServerConnection(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -104,14 +108,16 @@ WHERE id = ?;`, id)
 
 func CreateServerConnection(ctx context.Context, database *sql.DB, params CreateServerConnectionParams) (model.ServerConnection, error) {
 	result, err := database.ExecContext(ctx, `
-INSERT INTO server_connections(name, server_host, server_port, data_port, use_tls, client_secret, status, auto_start, remark)
-VALUES(?, ?, ?, ?, ?, ?, 'stopped', ?, ?);`,
+INSERT INTO tunnel_connections(name, server_host, server_port, data_port, use_tls, client_secret, local_host, local_port, status, auto_start, remark)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'stopped', ?, ?);`,
 		params.Name,
 		params.ServerHost,
 		params.ServerPort,
 		params.DataPort,
 		boolToInt(params.UseTLS),
 		params.ClientSecret,
+		params.LocalHost,
+		params.LocalPort,
 		boolToInt(params.AutoStart),
 		params.Remark,
 	)
@@ -127,8 +133,8 @@ VALUES(?, ?, ?, ?, ?, ?, 'stopped', ?, ?);`,
 
 func UpdateServerConnection(ctx context.Context, database *sql.DB, id int64, params UpdateServerConnectionParams) (model.ServerConnection, error) {
 	result, err := database.ExecContext(ctx, `
-UPDATE server_connections
-SET name = ?, server_host = ?, server_port = ?, data_port = ?, use_tls = ?, client_secret = ?, auto_start = ?, remark = ?, last_error = NULL
+UPDATE tunnel_connections
+SET name = ?, server_host = ?, server_port = ?, data_port = ?, use_tls = ?, client_secret = ?, local_host = ?, local_port = ?, auto_start = ?, remark = ?, last_error = NULL
 WHERE id = ?;`,
 		params.Name,
 		params.ServerHost,
@@ -136,6 +142,8 @@ WHERE id = ?;`,
 		params.DataPort,
 		boolToInt(params.UseTLS),
 		params.ClientSecret,
+		params.LocalHost,
+		params.LocalPort,
 		boolToInt(params.AutoStart),
 		params.Remark,
 		id,
@@ -158,7 +166,7 @@ func DeleteServerConnection(ctx context.Context, database *sql.DB, id int64) (mo
 	if err != nil {
 		return model.ServerConnection{}, err
 	}
-	if _, err := database.ExecContext(ctx, "DELETE FROM server_connections WHERE id = ?;", id); err != nil {
+	if _, err := database.ExecContext(ctx, "DELETE FROM tunnel_connections WHERE id = ?;", id); err != nil {
 		return model.ServerConnection{}, fmt.Errorf("delete server connection: %w", err)
 	}
 	return connection, nil
@@ -169,12 +177,12 @@ func SetServerConnectionStatus(ctx context.Context, database *sql.DB, id int64, 
 	var err error
 	if lastError == "" {
 		result, err = database.ExecContext(ctx, `
-UPDATE server_connections
+UPDATE tunnel_connections
 SET status = ?, last_error = NULL
 WHERE id = ?;`, status, id)
 	} else {
 		result, err = database.ExecContext(ctx, `
-UPDATE server_connections
+UPDATE tunnel_connections
 SET status = ?, last_error = ?
 WHERE id = ?;`, status, lastError, id)
 	}
@@ -203,7 +211,7 @@ func MarkServerConnectionConnected(ctx context.Context, database *sql.DB, id int
 
 func MarkServerConnectionHeartbeat(ctx context.Context, database *sql.DB, id int64) error {
 	result, err := database.ExecContext(ctx, `
-UPDATE server_connections
+UPDATE tunnel_connections
 SET status = 'connected', last_error = NULL
 WHERE id = ?;`, id)
 	if err != nil {
@@ -243,6 +251,8 @@ func scanServerConnection(scanner serverConnectionScanner) (model.ServerConnecti
 		&connection.DataPort,
 		&useTLS,
 		&connection.ClientSecret,
+		&connection.LocalHost,
+		&connection.LocalPort,
 		&connection.Status,
 		&autoStart,
 		&lastError,

@@ -41,8 +41,6 @@ func TestServerTunnelForwardsPublicTCPThroughBoundDataConnection(t *testing.T) {
 		Name:       "echo",
 		ClientID:   client.ID,
 		Protocol:   model.TunnelProtocolTCP,
-		LocalHost:  "127.0.0.1",
-		LocalPort:  9080,
 		RemoteHost: "127.0.0.1",
 		RemotePort: remotePort,
 	})
@@ -97,7 +95,7 @@ func TestServerTunnelForwardsPublicTCPThroughBoundDataConnection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode data_open payload: %v", err)
 	}
-	if openPayload.LocalHost != "127.0.0.1" || openPayload.LocalPort != 9080 || openPayload.DataPort != dataPort {
+	if openPayload.LocalHost != "" || openPayload.LocalPort != 0 || openPayload.DataPort != dataPort {
 		t.Fatalf("unexpected data_open payload: %+v", openPayload)
 	}
 
@@ -184,8 +182,6 @@ func TestServerClosesPublicConnectionWhenClientSendsDataClose(t *testing.T) {
 		Name:       "echo",
 		ClientID:   client.ID,
 		Protocol:   model.TunnelProtocolTCP,
-		LocalHost:  "127.0.0.1",
-		LocalPort:  9080,
 		RemoteHost: "127.0.0.1",
 		RemotePort: remotePort,
 	})
@@ -292,8 +288,6 @@ func TestServerStopTunnelSendsDataCloseForActiveConnection(t *testing.T) {
 		Name:       "echo",
 		ClientID:   client.ID,
 		Protocol:   model.TunnelProtocolTCP,
-		LocalHost:  "127.0.0.1",
-		LocalPort:  9080,
 		RemoteHost: "127.0.0.1",
 		RemotePort: remotePort,
 	})

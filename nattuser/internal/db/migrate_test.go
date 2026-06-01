@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 
@@ -48,11 +49,16 @@ WHERE type = 'table' AND name = ?;`, table).Scan(&name)
 
 func TestDataPersistsAfterDatabaseReopen(t *testing.T) {
 	ctx := context.Background()
-	dbPath := filepath.Join(t.TempDir(), "nattuser.db")
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "nattuser.db")
+	logDir := filepath.Join(dir, "logs")
 
 	database, err := Open(ctx, dbPath, nil)
 	if err != nil {
 		t.Fatalf("open database: %v", err)
+	}
+	if err := ConfigureAuditLogDir(ctx, database, logDir); err != nil {
+		t.Fatalf("configure audit log dir: %v", err)
 	}
 	connection, err := CreateServerConnection(ctx, database, CreateServerConnectionParams{
 		Name:         "prod-server",
@@ -73,6 +79,7 @@ func TestDataPersistsAfterDatabaseReopen(t *testing.T) {
 	if err := InsertAuditLog(ctx, database, "admin", "persist_test", "server_connection", "1", "persisted audit", "127.0.0.1"); err != nil {
 		t.Fatalf("insert audit log: %v", err)
 	}
+	assertSQLiteAuditLogCount(t, database, 0)
 	if err := database.Close(); err != nil {
 		t.Fatalf("close database: %v", err)
 	}
@@ -82,6 +89,9 @@ func TestDataPersistsAfterDatabaseReopen(t *testing.T) {
 		t.Fatalf("reopen database: %v", err)
 	}
 	defer reopened.Close()
+	if err := ConfigureAuditLogDir(ctx, reopened, logDir); err != nil {
+		t.Fatalf("configure reopened audit log dir: %v", err)
+	}
 
 	storedConnection, err := GetServerConnectionByID(ctx, reopened, connection.ID)
 	if err != nil {
@@ -109,6 +119,49 @@ func TestDataPersistsAfterDatabaseReopen(t *testing.T) {
 	}
 	if total != 1 || logs[0].Action != "persist_test" || logs[0].Content != "persisted audit" {
 		t.Fatalf("unexpected persisted audit logs total=%d logs=%+v", total, logs)
+	}
+}
+
+func TestConfigureAuditLogDirMigratesSQLiteAuditLogsOnce(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	database, err := Open(ctx, filepath.Join(dir, "nattuser.db"), nil)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer database.Close()
+
+	if _, err := database.ExecContext(ctx, `
+INSERT INTO audit_logs(actor, action, target_type, target_id, content, ip, created_at)
+VALUES('admin', 'legacy_audit', 'server_connection', '1', 'from sqlite', '127.0.0.1', '2026-05-31 10:00:00');`); err != nil {
+		t.Fatalf("insert legacy audit: %v", err)
+	}
+
+	logDir := filepath.Join(dir, "logs")
+	if err := ConfigureAuditLogDir(ctx, database, logDir); err != nil {
+		t.Fatalf("configure audit log dir: %v", err)
+	}
+	if err := ConfigureAuditLogDir(ctx, database, logDir); err != nil {
+		t.Fatalf("configure audit log dir second time: %v", err)
+	}
+
+	logs, total, err := ListAuditLogs(ctx, database, 10, 0)
+	if err != nil {
+		t.Fatalf("list migrated audit logs: %v", err)
+	}
+	if total != 1 || logs[0].Action != "legacy_audit" || logs[0].Content != "from sqlite" {
+		t.Fatalf("unexpected migrated audit logs total=%d logs=%+v", total, logs)
+	}
+}
+
+func assertSQLiteAuditLogCount(t *testing.T, database *sql.DB, want int) {
+	t.Helper()
+	var count int
+	if err := database.QueryRow("SELECT COUNT(1) FROM audit_logs").Scan(&count); err != nil {
+		t.Fatalf("count sqlite audit logs: %v", err)
+	}
+	if count != want {
+		t.Fatalf("sqlite audit log count=%d want=%d", count, want)
 	}
 }
 

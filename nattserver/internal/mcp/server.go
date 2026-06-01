@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"nattserver/internal/auth"
 	"nattserver/internal/config"
 	"nattserver/internal/db"
 	"nattserver/internal/logger"
@@ -24,7 +25,6 @@ type TunnelRuntime interface {
 }
 
 type serverHandler struct {
-	cfg       config.MCPConfig
 	tunnelCfg config.TunnelConfig
 	database  *sql.DB
 	log       *logger.Logger
@@ -43,9 +43,8 @@ type mcpResponse struct {
 }
 
 type pageParams struct {
-	Page     int   `json:"page"`
-	PageSize int   `json:"page_size"`
-	ClientID int64 `json:"client_id"`
+	Page     int `json:"page"`
+	PageSize int `json:"page_size"`
 }
 
 type idParams struct {
@@ -54,10 +53,7 @@ type idParams struct {
 
 type tunnelParams struct {
 	Name       string `json:"name"`
-	ClientID   int64  `json:"client_id"`
 	Protocol   string `json:"protocol"`
-	LocalHost  string `json:"local_host"`
-	LocalPort  int    `json:"local_port"`
 	RemoteHost string `json:"remote_host"`
 	RemotePort int    `json:"remote_port"`
 	AutoStart  bool   `json:"auto_start"`
@@ -74,31 +70,30 @@ type pageResult struct {
 func NewServerRouter(cfg config.MCPConfig, database *sql.DB, log *logger.Logger, runtime TunnelRuntime, tunnelCfg ...config.TunnelConfig) *gin.Engine {
 	router := gin.New()
 	router.Use(gin.Recovery())
+	RegisterServerRoutes(router, database, log, runtime, tunnelCfg...)
 
+	router.NoRoute(func(c *gin.Context) {
+		writeFail(c, http.StatusNotFound, "resource not found")
+	})
+	return router
+}
+
+func RegisterServerRoutes(router *gin.Engine, database *sql.DB, log *logger.Logger, runtime TunnelRuntime, tunnelCfg ...config.TunnelConfig) {
 	handler := &serverHandler{
-		cfg:       cfg,
 		tunnelCfg: resolveTunnelConfig(tunnelCfg),
 		database:  database,
 		log:       log,
 		runtime:   runtime,
 	}
 
-	router.GET("/health", func(c *gin.Context) {
+	group := router.Group("/mcp")
+	group.GET("/health", func(c *gin.Context) {
 		writeOK(c, gin.H{"status": "ok"})
 	})
 
-	if cfg.Enabled {
-		protected := router.Group("")
-		// MCP is intentionally a narrow operator API: one bearer token gates all
-		// tools, and mutating tunnel tools still write audit log records.
-		protected.Use(tokenAuthMiddleware(cfg.AccessToken))
-		protected.POST("/tools/call", handler.callTool)
-	}
-
-	router.NoRoute(func(c *gin.Context) {
-		writeFail(c, http.StatusNotFound, "resource not found")
-	})
-	return router
+	protected := group.Group("")
+	protected.Use(tokenAuthMiddleware(database))
+	protected.POST("/tools/call", handler.callTool)
 }
 
 func (h *serverHandler) callTool(c *gin.Context) {
@@ -111,10 +106,6 @@ func (h *serverHandler) callTool(c *gin.Context) {
 	// Dispatch is explicit rather than reflective, which keeps the MCP surface
 	// limited to the documented server.* tools.
 	switch strings.TrimSpace(req.Tool) {
-	case "server.list_clients":
-		h.listClients(c, req.Params)
-	case "server.get_client":
-		h.getClient(c, req.Params)
 	case "server.list_tunnels":
 		h.listTunnels(c, req.Params)
 	case "server.create_tunnel":
@@ -132,42 +123,12 @@ func (h *serverHandler) callTool(c *gin.Context) {
 	}
 }
 
-func (h *serverHandler) listClients(c *gin.Context, raw json.RawMessage) {
-	params, ok := bindPageParams(c, raw)
-	if !ok {
-		return
-	}
-	clients, total, err := db.ListClients(c.Request.Context(), h.database, params.limit(), params.offset())
-	if err != nil {
-		h.writeError(c, err, "list clients failed")
-		return
-	}
-	writeOK(c, pageResult{Items: clients, Total: total, Page: params.Page, PageSize: params.PageSize})
-}
-
-func (h *serverHandler) getClient(c *gin.Context, raw json.RawMessage) {
-	var params idParams
-	if !bindParams(c, raw, &params) {
-		return
-	}
-	if params.ID <= 0 {
-		writeFail(c, http.StatusBadRequest, "id is required")
-		return
-	}
-	client, err := db.GetClientByID(c.Request.Context(), h.database, params.ID)
-	if err != nil {
-		h.writeError(c, err, "get client failed")
-		return
-	}
-	writeOK(c, client)
-}
-
 func (h *serverHandler) listTunnels(c *gin.Context, raw json.RawMessage) {
 	params, ok := bindPageParams(c, raw)
 	if !ok {
 		return
 	}
-	tunnels, total, err := db.ListTunnels(c.Request.Context(), h.database, params.ClientID, params.limit(), params.offset())
+	tunnels, total, err := db.ListTunnels(c.Request.Context(), h.database, 0, params.limit(), params.offset())
 	if err != nil {
 		h.writeError(c, err, "list tunnels failed")
 		return
@@ -192,17 +153,9 @@ func (h *serverHandler) createTunnel(c *gin.Context, raw json.RawMessage) {
 	if !h.validateTunnelParams(c, &params) {
 		return
 	}
-	if _, err := db.GetClientByID(c.Request.Context(), h.database, params.ClientID); err != nil {
-		h.writeError(c, err, "load client failed")
-		return
-	}
-
 	tunnel, err := db.CreateTunnel(c.Request.Context(), h.database, db.CreateTunnelParams{
 		Name:       params.Name,
-		ClientID:   params.ClientID,
 		Protocol:   model.TunnelProtocolTCP,
-		LocalHost:  params.LocalHost,
-		LocalPort:  params.LocalPort,
 		RemoteHost: params.RemoteHost,
 		RemotePort: params.RemotePort,
 		AutoStart:  params.AutoStart,
@@ -212,8 +165,18 @@ func (h *serverHandler) createTunnel(c *gin.Context, raw json.RawMessage) {
 		h.writeError(c, err, "create tunnel failed")
 		return
 	}
+	secret, secretHash, secretHint, err := buildMCPSecret()
+	if err != nil {
+		h.writeError(c, err, "generate tunnel secret failed")
+		return
+	}
+	key, err := db.CreateTunnelKey(c.Request.Context(), h.database, db.CreateTunnelKeyParams{TunnelID: tunnel.ID, SecretHash: secretHash, SecretHint: secretHint})
+	if err != nil {
+		h.writeError(c, err, "create tunnel key failed")
+		return
+	}
 	h.audit(c, "mcp_tunnel_create", tunnel.ID, fmt.Sprintf("mcp created tunnel %s", tunnel.Name))
-	writeOK(c, tunnel)
+	writeOK(c, gin.H{"tunnel": tunnel, "key": key, "secret": secret})
 }
 
 func (h *serverHandler) startTunnel(c *gin.Context, raw json.RawMessage) {
@@ -285,7 +248,6 @@ func (h *serverHandler) stopTunnelByID(ctx context.Context, id int64) (model.Tun
 func (h *serverHandler) validateTunnelParams(c *gin.Context, params *tunnelParams) bool {
 	params.Name = strings.TrimSpace(params.Name)
 	params.Protocol = strings.ToLower(strings.TrimSpace(params.Protocol))
-	params.LocalHost = strings.TrimSpace(params.LocalHost)
 	params.RemoteHost = strings.TrimSpace(params.RemoteHost)
 	if params.Protocol == "" {
 		params.Protocol = string(model.TunnelProtocolTCP)
@@ -297,14 +259,8 @@ func (h *serverHandler) validateTunnelParams(c *gin.Context, params *tunnelParam
 	switch {
 	case params.Name == "":
 		writeFail(c, http.StatusBadRequest, "name is required")
-	case params.ClientID <= 0:
-		writeFail(c, http.StatusBadRequest, "client_id is required")
 	case params.Protocol != string(model.TunnelProtocolTCP):
 		writeFail(c, http.StatusBadRequest, "only tcp protocol is supported")
-	case params.LocalHost == "":
-		writeFail(c, http.StatusBadRequest, "local_host is required")
-	case !validPort(params.LocalPort):
-		writeFail(c, http.StatusBadRequest, "local_port must be between 1 and 65535")
 	case !validPort(params.RemotePort):
 		writeFail(c, http.StatusBadRequest, "remote_port must be between 1 and 65535")
 	case params.RemotePort < h.tunnelCfg.RemotePortMin || params.RemotePort > h.tunnelCfg.RemotePortMax:
@@ -341,9 +297,30 @@ func resolveTunnelConfig(values []config.TunnelConfig) config.TunnelConfig {
 	return config.Default().Tunnel
 }
 
-func tokenAuthMiddleware(accessToken string) gin.HandlerFunc {
+func tokenAuthMiddleware(database *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if accessToken == "" || extractToken(c) != accessToken {
+		enabled, err := db.GetSetting(c.Request.Context(), database, "mcp.enabled")
+		if errors.Is(err, db.ErrNotFound) || !strings.EqualFold(enabled, "true") {
+			writeFail(c, http.StatusForbidden, "mcp disabled")
+			c.Abort()
+			return
+		}
+		if err != nil {
+			writeFail(c, http.StatusInternalServerError, "load mcp settings failed")
+			c.Abort()
+			return
+		}
+		accessToken, err := db.GetSetting(c.Request.Context(), database, "mcp.access_token")
+		if err != nil {
+			if errors.Is(err, db.ErrNotFound) {
+				writeFail(c, http.StatusUnauthorized, "unauthorized")
+			} else {
+				writeFail(c, http.StatusInternalServerError, "load mcp settings failed")
+			}
+			c.Abort()
+			return
+		}
+		if strings.TrimSpace(accessToken) == "" || extractToken(c) != accessToken {
 			writeFail(c, http.StatusUnauthorized, "unauthorized")
 			c.Abort()
 			return
@@ -412,6 +389,18 @@ func (p pageParams) offset() int {
 
 func validPort(port int) bool {
 	return port > 0 && port <= 65535
+}
+
+func buildMCPSecret() (plain string, hash string, hint string, err error) {
+	plain, err = auth.GenerateClientSecret()
+	if err != nil {
+		return "", "", "", err
+	}
+	hash, err = auth.HashPassword(plain)
+	if err != nil {
+		return "", "", "", err
+	}
+	return plain, hash, auth.SecretHint(plain), nil
 }
 
 func writeOK(c *gin.Context, data any) {

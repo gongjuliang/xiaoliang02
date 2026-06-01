@@ -1,7 +1,10 @@
 package api
 
 import (
+	"bytes"
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"nattserver/internal/db"
@@ -20,8 +23,6 @@ func TestOpsDashboardAuditAndConfigFlow(t *testing.T) {
 	tunnelResp := authorizedJSON(t, router, http.MethodPost, "/api/server/v1/tunnels", tokens.AccessToken, map[string]any{
 		"name":        "ops-tunnel",
 		"client_id":   createdClient.Client.ID,
-		"local_host":  "127.0.0.1",
-		"local_port":  8080,
 		"remote_port": 18081,
 	})
 	var createdTunnel struct {
@@ -76,11 +77,30 @@ func TestOpsDashboardAuditAndConfigFlow(t *testing.T) {
 	rejected := authorizedJSONAllowStatus(t, router, http.MethodPost, "/api/server/v1/tunnels", tokens.AccessToken, map[string]any{
 		"name":        "too-low",
 		"client_id":   createdClient.Client.ID,
-		"local_host":  "127.0.0.1",
-		"local_port":  8080,
 		"remote_port": 19999,
 	}, http.StatusBadRequest)
 	assertResponseCode(t, rejected, CodeBadRequest)
+}
+
+func TestServerRouterServesMCPOnHTTPPort(t *testing.T) {
+	router, database, _ := setupAuthenticatedServerRouter(t)
+	defer database.Close()
+
+	body, err := json.Marshal(map[string]any{
+		"tool":   "server.get_dashboard",
+		"params": map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("marshal mcp request: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/mcp/tools/call", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer server-mcp-token")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("mcp status=%d body=%s", rec.Code, rec.Body.String())
+	}
 }
 
 func hasConfigResult(results []configUpdateResult, key string, hotReloaded bool, restartRequired bool) bool {

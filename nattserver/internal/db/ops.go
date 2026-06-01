@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"nattserver/internal/model"
@@ -11,6 +12,7 @@ import (
 type DashboardSummary struct {
 	OnlineClients     int64 `json:"online_clients"`
 	TotalClients      int64 `json:"total_clients"`
+	OnlineTunnels     int64 `json:"online_tunnels"`
 	RunningTunnels    int64 `json:"running_tunnels"`
 	TotalTunnels      int64 `json:"total_tunnels"`
 	ActiveConnections int64 `json:"active_connections"`
@@ -21,15 +23,14 @@ type DashboardSummary struct {
 
 func GetDashboardSummary(ctx context.Context, database *sql.DB) (DashboardSummary, error) {
 	var summary DashboardSummary
-	if err := database.QueryRowContext(ctx, "SELECT COUNT(1) FROM clients").Scan(&summary.TotalClients); err != nil {
-		return DashboardSummary{}, fmt.Errorf("count clients: %w", err)
+	if err := database.QueryRowContext(ctx, "SELECT COUNT(1) FROM tunnel_keys WHERE online_status = 'online'").Scan(&summary.OnlineTunnels); err != nil {
+		return DashboardSummary{}, fmt.Errorf("count online tunnels: %w", err)
 	}
-	if err := database.QueryRowContext(ctx, "SELECT COUNT(1) FROM clients WHERE online_status = 'online'").Scan(&summary.OnlineClients); err != nil {
-		return DashboardSummary{}, fmt.Errorf("count online clients: %w", err)
-	}
+	summary.OnlineClients = summary.OnlineTunnels
 	if err := database.QueryRowContext(ctx, "SELECT COUNT(1) FROM tunnels").Scan(&summary.TotalTunnels); err != nil {
 		return DashboardSummary{}, fmt.Errorf("count tunnels: %w", err)
 	}
+	summary.TotalClients = summary.TotalTunnels
 	if err := database.QueryRowContext(ctx, "SELECT COUNT(1) FROM tunnels WHERE status = 'running'").Scan(&summary.RunningTunnels); err != nil {
 		return DashboardSummary{}, fmt.Errorf("count running tunnels: %w", err)
 	}
@@ -51,38 +52,7 @@ FROM traffic_stats;`).Scan(
 }
 
 func ListAuditLogs(ctx context.Context, database *sql.DB, limit int, offset int) ([]model.AuditLog, int64, error) {
-	var total int64
-	if err := database.QueryRowContext(ctx, "SELECT COUNT(1) FROM audit_logs").Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("count audit logs: %w", err)
-	}
-	rows, err := database.QueryContext(ctx, `
-SELECT id, actor, action, target_type, target_id, content, ip, created_at
-FROM audit_logs
-ORDER BY id DESC
-LIMIT ? OFFSET ?;`, limit, offset)
-	if err != nil {
-		return nil, 0, fmt.Errorf("list audit logs: %w", err)
-	}
-	defer rows.Close()
-
-	var logs []model.AuditLog
-	for rows.Next() {
-		var item model.AuditLog
-		var targetType sql.NullString
-		var targetID sql.NullString
-		var ip sql.NullString
-		if err := rows.Scan(&item.ID, &item.Actor, &item.Action, &targetType, &targetID, &item.Content, &ip, &item.CreatedAt); err != nil {
-			return nil, 0, fmt.Errorf("scan audit log: %w", err)
-		}
-		item.TargetType = nullableString(targetType)
-		item.TargetID = nullableString(targetID)
-		item.IP = nullableString(ip)
-		logs = append(logs, item)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, 0, fmt.Errorf("iterate audit logs: %w", err)
-	}
-	return logs, total, nil
+	return listAuditLogsFromFiles(limit, offset)
 }
 
 func ListSettings(ctx context.Context, database *sql.DB) ([]model.Setting, error) {
@@ -118,4 +88,16 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value;`, key, value)
 		return fmt.Errorf("upsert setting %s: %w", key, err)
 	}
 	return nil
+}
+
+func GetSetting(ctx context.Context, database *sql.DB, key string) (string, error) {
+	var value string
+	err := database.QueryRowContext(ctx, "SELECT value FROM settings WHERE key = ?;", key).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("get setting %s: %w", key, err)
+	}
+	return value, nil
 }

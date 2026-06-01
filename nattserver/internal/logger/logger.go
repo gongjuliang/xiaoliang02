@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -133,7 +134,15 @@ func (l *Logger) logf(level Level, label string, format string, args ...any) {
 	if l.base == nil {
 		return
 	}
-	l.base.Printf("[%s] %s", label, fmt.Sprintf(format, args...))
+	l.base.Printf("[%s] %s %s", label, callerLocation(), fmt.Sprintf(format, args...))
+}
+
+func callerLocation() string {
+	_, file, line, ok := runtime.Caller(3)
+	if !ok {
+		return "unknown:0"
+	}
+	return fmt.Sprintf("%s:%d", filepath.Base(file), line)
 }
 
 func (l *Logger) rotateIfNeededLocked() error {

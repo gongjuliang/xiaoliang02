@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>MCP</title>
+    <link rel="stylesheet" href="/static/layui/css/layui.css">
+    <link rel="stylesheet" href="/static/css/app.css">
+    <style>
+        body { min-height: auto; padding: 22px 24px; }
+        .mcp-form { display: grid; gap: 12px; max-width: 520px; }
+        .mcp-form input { width: 100%; }
+        .hint { color: #687386; }
+        .secret-box { font-family: monospace; background: #f5f7fb; border: 1px solid #dbe3ef; border-radius: 6px; padding: 8px; margin-top: 8px; word-break: break-all; }
+    </style>
+</head>
+<body>
+<div id="content"></div>
+<script src="/static/js/jquery/jquery-3.6.0.min.js"></script>
+<script src="/static/layui/layui.js"></script>
+<script src="/static/js/app.js"></script>
+<script>
+if (NATT.requireAuth()) {
+    function loadMCP() {
+        NATT.request("GET", "/mcp-config").then(function (d) {
+            $("#content").html('<div class="panel"><h3>MCP 配置</h3><div class="mcp-form"><label><input id="enabled" type="checkbox" ' + (d.enabled ? 'checked' : '') + '> 启用 MCP</label><label>访问 Key<input id="token" class="layui-input" placeholder="留空则保留原 key"></label><p class="hint">当前 Key：' + NATT.escapeHtml(d.access_token_hint || "未设置") + '</p><button id="saveMCP" class="layui-btn primary" type="button">保存</button><button id="rotateMCP" class="layui-btn" type="button">重置 Key</button></div></div>');
+        }).fail(NATT.showError);
+    }
+    $("#content").on("click", "#saveMCP", function () {
+        NATT.request("PUT", "/mcp-config", { enabled: $("#enabled").prop("checked"), access_token: $("#token").val() }).then(loadMCP).fail(NATT.showError);
+    });
+    $("#content").on("click", "#rotateMCP", function () {
+        NATT.request("POST", "/mcp-config/rotate-token").then(function (d) {
+            layui.layer.alert('新 MCP Key：<div class="secret-box">' + NATT.escapeHtml(d.access_token) + '</div>');
+            loadMCP();
+        }).fail(NATT.showError);
+    });
+    loadMCP();
+}
+</script>
+</body>
+</html>

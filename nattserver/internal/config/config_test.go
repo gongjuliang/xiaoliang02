@@ -224,14 +224,8 @@ func TestValidateRejectsInvalidPortsAndTunnelRange(t *testing.T) {
 			cfg.Tunnel.RemotePortMin = 30000
 			cfg.Tunnel.RemotePortMax = 20000
 		},
-		"mcp port above range when enabled": func(cfg *Config) {
-			cfg.MCP.Enabled = true
-			cfg.MCP.AccessToken = "token"
-			cfg.MCP.Port = 70000
-		},
 		"mcp token empty when enabled": func(cfg *Config) {
 			cfg.MCP.Enabled = true
-			cfg.MCP.Port = 19092
 			cfg.MCP.AccessToken = ""
 		},
 	}
@@ -244,6 +238,25 @@ func TestValidateRejectsInvalidPortsAndTunnelRange(t *testing.T) {
 				t.Fatal("expected validation error")
 			}
 		})
+	}
+}
+
+func TestValidateAllowsMCPWithoutDeprecatedHostPort(t *testing.T) {
+	cfg := Default()
+	cfg.MCP.Enabled = true
+	cfg.MCP.Host = ""
+	cfg.MCP.Port = 0
+	cfg.MCP.AccessToken = "server-mcp-token"
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("validate with HTTP-hosted MCP: %v", err)
+	}
+}
+
+func TestDefaultMCPDoesNotExposeDedicatedAddress(t *testing.T) {
+	cfg := Default()
+	if cfg.MCP.Host != "" || cfg.MCP.Port != 0 {
+		t.Fatalf("default MCP address=%s:%d want empty deprecated address", cfg.MCP.Host, cfg.MCP.Port)
 	}
 }
 

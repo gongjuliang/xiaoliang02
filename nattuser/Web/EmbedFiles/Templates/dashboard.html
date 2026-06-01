@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>本机状态</title>
+    <link rel="stylesheet" href="/static/layui/css/layui.css">
+    <link rel="stylesheet" href="/static/css/app.css">
+    <style>
+        body { min-height: auto; padding: 22px 24px; }
+        .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; }
+        .metric { background: #fff; border: 1px solid #e8edf3; border-radius: 6px; padding: 16px; }
+        .metric b { display: block; font-size: 24px; margin-top: 8px; }
+    </style>
+</head>
+<body>
+<div id="content"></div>
+<script src="/static/js/jquery/jquery-3.6.0.min.js"></script>
+<script src="/static/layui/layui.js"></script>
+<script src="/static/js/app.js"></script>
+<script>
+if (NATT.requireAuth()) {
+    NATT.request("GET", "/status").then(function (d) {
+        var s = d.server_connections || {};
+        $("#content").html('<div class="metric-grid"><div class="metric"><span>隧道连接总数</span><b>' + NATT.escapeHtml(s.total_server_connections || 0) + '</b></div><div class="metric"><span>已连接</span><b>' + NATT.escapeHtml(s.connected_server_connections || 0) + '</b></div><div class="metric"><span>已停止</span><b>' + NATT.escapeHtml(s.stopped_server_connections || 0) + '</b></div><div class="metric"><span>异常</span><b>' + NATT.escapeHtml(s.error_server_connections || 0) + '</b></div></div>');
+    }).fail(NATT.showError);
+}
+</script>
+</body>
+</html>

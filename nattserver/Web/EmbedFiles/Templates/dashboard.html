@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>仪表盘</title>
+    <link rel="stylesheet" href="/static/layui/css/layui.css">
+    <link rel="stylesheet" href="/static/css/app.css">
+    <style>
+        body { min-height: auto; padding: 22px 24px; }
+        .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; }
+        .metric { background: #fff; border: 1px solid #e8edf3; border-radius: 6px; padding: 16px; }
+        .metric b { display: block; font-size: 24px; margin-top: 8px; }
+    </style>
+</head>
+<body>
+<div id="content"></div>
+<script src="/static/js/jquery/jquery-3.6.0.min.js"></script>
+<script src="/static/layui/layui.js"></script>
+<script src="/static/js/app.js"></script>
+<script>
+if (NATT.requireAuth()) {
+    NATT.request("GET", "/dashboard").then(function (d) {
+        $("#content").html('<div class="metric-grid">' +
+            '<div class="metric"><span>隧道总数</span><b>' + NATT.escapeHtml(d.total_tunnels || 0) + '</b></div>' +
+            '<div class="metric"><span>在线隧道</span><b>' + NATT.escapeHtml(d.online_tunnels || 0) + '</b></div>' +
+            '<div class="metric"><span>运行隧道</span><b>' + NATT.escapeHtml(d.running_tunnels || 0) + '</b></div>' +
+            '<div class="metric"><span>当前连接</span><b>' + NATT.escapeHtml(d.active_connections || 0) + '</b></div>' +
+            '<div class="metric"><span>累计连接</span><b>' + NATT.escapeHtml(d.connection_count || 0) + '</b></div>' +
+            '<div class="metric"><span>上行字节</span><b>' + NATT.escapeHtml(d.bytes_in || 0) + '</b></div>' +
+            '<div class="metric"><span>下行字节</span><b>' + NATT.escapeHtml(d.bytes_out || 0) + '</b></div>' +
+        '</div>');
+    }).fail(NATT.showError);
+}
+</script>
+</body>
+</html>

@@ -50,7 +50,7 @@
 - [x] 实现 `users` 表。
 - [x] 实现 `clients` 表。
 - [x] 实现 `tunnels` 表。
-- [x] 实现 `audit_logs` 表。
+- [x] 保留兼容用 `audit_logs` 表，并实现迁移到 JSONL 审计文件。
 - [x] 实现 `settings` 表。
 - [x] 实现 `traffic_stats` 表。
 - [x] 为 `username`、`secret_hash`、`remote_port` 增加唯一约束。
@@ -60,7 +60,8 @@
 
 - [x] 实现 `users` 表。
 - [x] 实现 `server_connections` 表。
-- [x] 实现 `audit_logs` 表。
+- [x] 实现 `local_tunnels` 表，用于绑定服务端隧道 ID 和本地 `local_host:local_port`。
+- [x] 保留兼容用 `audit_logs` 表，并实现迁移到 JSONL 审计文件。
 - [x] 实现 `settings` 表。
 - [x] 初始化默认管理员账号。
 
@@ -109,6 +110,7 @@
 
 - [x] 实现隧道列表接口 `GET /api/server/v1/tunnels`。
 - [x] 实现新增隧道接口 `POST /api/server/v1/tunnels`。
+- [x] 服务端隧道创建/编辑不再接收 `local_host/local_port`，本地目标由客户端绑定。
 - [x] 校验 `remote_port` 唯一且在允许端口范围内。
 - [x] 实现编辑隧道接口 `PUT /api/server/v1/tunnels/:id`。
 - [x] 实现删除隧道接口 `DELETE /api/server/v1/tunnels/:id`。
@@ -143,6 +145,10 @@
 ### 5.2 本地状态接口
 
 - [x] 实现本地隧道状态接口 `GET /api/client/v1/tunnels`。
+- [x] 实现本地隧道新增接口 `POST /api/client/v1/tunnels`。
+- [x] 实现本地隧道编辑接口 `PUT /api/client/v1/tunnels/:id`。
+- [x] 实现本地隧道删除接口 `DELETE /api/client/v1/tunnels/:id`。
+- [x] 校验 `server_connection_id + server_tunnel_id` 唯一，并校验本地端口范围。
 - [x] 实现本机运行状态接口 `GET /api/client/v1/status`。
 - [x] 实现审计日志接口 `GET /api/client/v1/audit-logs`。
 - [x] 实现配置查询接口 `GET /api/client/v1/config`。
@@ -198,7 +204,8 @@
 
 - [x] 收到 `data_open` 后连接服务端数据连接端口，默认 `7001`。
 - [x] 数据连接首帧发送客户端秘钥、`tunnel_id`、`connection_id`。
-- [x] 认证成功后连接本地 `local_host:local_port`。
+- [x] 认证成功后按 `server_connection_id + server_tunnel_id` 查询 `local_tunnels`，再连接本地 `local_host:local_port`。
+- [x] 缺少本地绑定或绑定禁用时向服务端返回 `data_close` 或隧道错误状态。
 - [x] 本地服务连接失败时通知服务端关闭该连接。
 - [x] 本地连接成功后双向复制本地连接和服务端数据连接流量。
 - [x] 任一方向关闭时释放全部资源。
@@ -230,6 +237,8 @@
 - [x] 隧道管理页。
 - [x] 系统配置页。
 - [x] 审计日志页。
+- [x] 前端拆分为 `login.html`、`dashboard.html`、`clients.html`、`tunnels.html`、`config.html`、`audit.html` 等独立模块页。
+- [x] 服务端隧道表单不再展示或提交本地地址/端口。
 - [x] 隧道新增/编辑弹窗。
 - [x] 客户端新增/编辑/秘钥轮换弹窗。
 
@@ -241,6 +250,8 @@
 - [x] 本机状态页。
 - [x] 系统配置页。
 - [x] 审计日志页。
+- [x] 前端拆分为 `login.html`、`dashboard.html`、`servers.html`、`tunnels.html`、`config.html`、`audit.html` 等独立模块页。
+- [x] 客户端隧道页支持新增、编辑、删除本地绑定。
 - [x] 服务端连接新增/编辑弹窗。
 
 ## 9. MCP AI 扩展接口
@@ -249,6 +260,7 @@
 
 - [x] 增加 MCP 启停配置。
 - [x] 增加 MCP 访问令牌或复用管理鉴权。
+- [x] MCP 路由挂到同一个 HTTP 服务，使用 `/mcp/health` 和 `/mcp/tools/call`。
 - [x] 实现 `server.list_clients`。
 - [x] 实现 `server.get_client`。
 - [x] 实现 `server.list_tunnels`。
@@ -263,6 +275,7 @@
 
 - [x] 增加 MCP 启停配置。
 - [x] 增加 MCP 访问令牌或复用管理鉴权。
+- [x] MCP 路由挂到同一个 HTTP 服务，使用 `/mcp/health` 和 `/mcp/tools/call`。
 - [x] 实现 `client.list_servers`。
 - [x] 实现 `client.connect_server`。
 - [x] 实现 `client.disconnect_server`。
@@ -280,7 +293,10 @@
 - [x] 本地服务不可达时返回明确错误。
 - [x] 关键日志包含 request_id、client_id、tunnel_id、connection_id。
 - [x] 支持 `error`、`info`、`debug` 日志级别。
+- [x] 普通日志输出包含触发 Go 文件名和行号。
 - [x] 支持日志按日期切分。
+- [x] 审计日志写入 `logs/audit/YYYY-MM-DD.jsonl`。
+- [x] 首次启动将旧 SQLite `audit_logs` 迁移到 JSONL，并写入迁移标记避免重复导出。
 - [x] 支持 Windows、Linux、macOS 编译。
 
 ## 11. 测试与验收
@@ -302,6 +318,8 @@
 - [x] 客户端使用授权秘钥成功连接服务端。
 - [x] 服务端后台显示客户端在线。
 - [x] 创建 TCP 隧道后公网端口可访问客户端本地 TCP 服务。
+- [x] 服务端隧道不配置本地目标，客户端本地绑定配置决定 `local_host/local_port`。
+- [x] 客户端缺少本地绑定或绑定禁用时，服务端展示可见错误。
 - [x] 多客户端、多隧道并发运行。
 - [x] 客户端断线后服务端显示离线。
 - [x] 客户端恢复后自启动隧道自动恢复。
@@ -311,13 +329,14 @@
 - [x] 服务端和客户端重启后配置、隧道、审计日志仍存在。
 - [x] JWT 过期、刷新、鉴权、限流均按预期生效。
 - [x] MCP 查询和控制接口返回预期结果。
+- [x] MCP 通过 HTTP 端口下的 `/mcp/tools/call` 调用，不再启动独立 MCP 监听端口。
 - [x] 开启 TLS 后客户端可正常连接服务端。
 - [x] 关闭 TLS 后开发环境可正常连接服务端。
 
 ## 12. 建议开发顺序
 
 1. 完成服务端和客户端基础工程。
-2. 完成 SQLite 表结构、配置、日志、统一响应。
+2. 完成 SQLite 表结构、配置、普通日志、JSONL 审计日志、统一响应。
 3. 完成 Web 登录、JWT、后台鉴权。
 4. 完成服务端客户端授权管理 API。
 5. 完成客户端服务端连接管理 API。

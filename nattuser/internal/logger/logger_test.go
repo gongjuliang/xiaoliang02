@@ -34,6 +34,26 @@ func TestLoggerRotatesFileWhenDateChanges(t *testing.T) {
 	}
 }
 
+func TestLoggerIncludesCallerFileAndLine(t *testing.T) {
+	dir := t.TempDir()
+	log, err := newWithClock(dir, "info", func() time.Time {
+		return time.Date(2026, 5, 31, 10, 0, 0, 0, time.Local)
+	}, io.Discard)
+	if err != nil {
+		t.Fatalf("new logger: %v", err)
+	}
+
+	log.Infof("caller-location-message")
+	if err := log.Close(); err != nil {
+		t.Fatalf("close logger: %v", err)
+	}
+
+	content := readLogFile(t, filepath.Join(dir, "2026-05-31.log"))
+	if !strings.Contains(content, "[INFO] logger_test.go:") || !strings.Contains(content, "caller-location-message") {
+		t.Fatalf("log content missing caller file and line: %q", content)
+	}
+}
+
 func readLogFile(t *testing.T, path string) string {
 	t.Helper()
 	content, err := os.ReadFile(path)

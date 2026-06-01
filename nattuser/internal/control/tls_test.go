@@ -60,11 +60,12 @@ func TestManagerConnectsAndForwardsDataWhenTLSEnabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create server connection: %v", err)
 	}
+	createLocalTunnelBinding(t, ctx, database, connection.ID, 7, localHost, localPort, true)
 
 	dataDone := make(chan error, 1)
 	go runFakeDataServer(t, dataListener, dataDone)
 	controlDone := make(chan error, 1)
-	go runDataOpenControlServer(t, controlListener, localHost, localPort, dataHost, dataPort, controlDone)
+	go runDataOpenControlServer(t, controlListener, dataHost, dataPort, controlDone)
 
 	manager := NewManagerWithOptions(config.Default(), database, nil, Options{
 		ScanInterval:      10 * time.Millisecond,
@@ -79,16 +80,7 @@ func TestManagerConnectsAndForwardsDataWhenTLSEnabled(t *testing.T) {
 		managerDone <- manager.Run(runCtx)
 	}()
 
-	select {
-	case err := <-dataDone:
-		if err != nil {
-			t.Fatalf("fake TLS data server failed: %v", err)
-		}
-	case err := <-controlDone:
-		t.Fatalf("fake TLS control server failed before data flow: %v", err)
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for TLS data forwarding")
-	}
+	waitForDataDone(t, dataDone, controlDone)
 
 	stored, err := db.GetServerConnectionByID(ctx, database, connection.ID)
 	if err != nil {

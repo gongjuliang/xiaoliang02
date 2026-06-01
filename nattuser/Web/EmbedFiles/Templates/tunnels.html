@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>隧道连接</title>
+    <link rel="stylesheet" href="/static/layui/css/layui.css">
+    <link rel="stylesheet" href="/static/css/app.css">
+    <style>
+        body { min-height: auto; padding: 22px 24px; }
+        .tunnel-form { display: grid; gap: 12px; padding: 12px 4px 0; }
+        .tunnel-form label { display: grid; gap: 6px; }
+        .tunnel-form input { width: 100%; }
+        .inline-actions button { margin-right: 6px; }
+    </style>
+</head>
+<body>
+<div id="content"></div>
+<script src="/static/js/jquery/jquery-3.6.0.min.js"></script>
+<script src="/static/layui/layui.js"></script>
+<script src="/static/js/app.js"></script>
+<script>
+if (NATT.requireAuth()) {
+    function loadConnections() {
+        NATT.request("GET", "/tunnel-connections?page=1&page_size=100").then(function (p) {
+            var rows = (p.items || []).map(function (x) {
+                return '<tr><td>' + x.id + '</td><td>' + NATT.escapeHtml(x.name) + '</td><td>' +
+                    NATT.escapeHtml(x.server_host) + ':' + x.server_port + '</td><td>' +
+                    NATT.escapeHtml(x.local_host) + ':' + x.local_port + '</td><td>' + NATT.badge(x.status) +
+                    '</td><td class="inline-actions"><button type="button" class="layui-btn layui-btn-xs" data-act="start" data-id="' + x.id + '">连接</button>' +
+                    '<button type="button" class="layui-btn layui-btn-primary layui-btn-xs" data-act="stop" data-id="' + x.id + '">断开</button>' +
+                    '<button type="button" class="layui-btn layui-btn-danger layui-btn-xs" data-act="del" data-id="' + x.id + '">删除</button></td></tr>';
+            }).join("");
+            $("#content").html('<div class="panel"><div class="toolbar"><h3>隧道连接</h3><button id="newConn" class="layui-btn primary" type="button">新增</button></div><table class="data-table"><thead><tr><th>ID</th><th>名称</th><th>服务端</th><th>本地目标</th><th>状态</th><th>操作</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
+        }).fail(NATT.showError);
+    }
+    function form() {
+        return '<div class="tunnel-form">' +
+            '<label>名称<input id="cn" class="layui-input" placeholder="名称"></label>' +
+            '<label>服务端地址<input id="sh" class="layui-input" value="127.0.0.1"></label>' +
+            '<label>控制端口<input id="sp" class="layui-input" type="number" value="7000"></label>' +
+            '<label>数据端口<input id="dp" class="layui-input" type="number" value="7001"></label>' +
+            '<label>隧道秘钥<input id="cs" class="layui-input" placeholder="nattserver 创建隧道后显示的 key"></label>' +
+            '<label>本地地址<input id="lh" class="layui-input" value="127.0.0.1"></label>' +
+            '<label>本地端口<input id="lp" class="layui-input" type="number"></label>' +
+            '<label><span><input id="tls" type="checkbox"> TLS</span></label>' +
+            '<label><span><input id="as" type="checkbox"> 自启动</span></label></div>';
+    }
+    $("#content").on("click", "#newConn", function () {
+        layui.layer.open({
+            title: "新增隧道连接",
+            area: "560px",
+            content: form(),
+            btn: ["保存", "取消"],
+            yes: function (index) {
+                NATT.request("POST", "/tunnel-connections", {
+                    name: $("#cn").val(),
+                    server_host: $("#sh").val(),
+                    server_port: +$("#sp").val(),
+                    data_port: +$("#dp").val(),
+                    client_secret: $("#cs").val(),
+                    local_host: $("#lh").val(),
+                    local_port: +$("#lp").val(),
+                    use_tls: $("#tls").prop("checked"),
+                    auto_start: $("#as").prop("checked")
+                }).then(function () {
+                    layui.layer.close(index);
+                    loadConnections();
+                }).fail(NATT.showError);
+            }
+        });
+    });
+    $("#content").on("click", "button[data-act]", function () {
+        var id = $(this).data("id"), act = $(this).data("act");
+        if (act === "del") {
+            layui.layer.confirm("确定删除该隧道连接吗？", { title: "删除确认" }, function (index) {
+                layui.layer.close(index);
+                NATT.request("DELETE", "/tunnel-connections/" + id).then(loadConnections).fail(NATT.showError);
+            });
+        } else {
+            NATT.request("POST", "/tunnel-connections/" + id + "/" + act).then(loadConnections).fail(NATT.showError);
+        }
+    });
+    loadConnections();
+}
+</script>
+</body>
+</html>

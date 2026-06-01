@@ -24,7 +24,7 @@ type User struct {
 	UpdatedAt    string   `json:"updated_at"`
 }
 
-type ServerConnection struct {
+type TunnelConnection struct {
 	ID           int64                  `json:"id"`
 	Name         string                 `json:"name"`
 	ServerHost   string                 `json:"server_host"`
@@ -32,12 +32,30 @@ type ServerConnection struct {
 	DataPort     int                    `json:"data_port"`
 	UseTLS       bool                   `json:"use_tls"`
 	ClientSecret string                 `json:"-"`
+	LocalHost    string                 `json:"local_host"`
+	LocalPort    int                    `json:"local_port"`
 	Status       ServerConnectionStatus `json:"status"`
 	AutoStart    bool                   `json:"auto_start"`
 	LastError    string                 `json:"last_error"`
 	Remark       string                 `json:"remark"`
 	CreatedAt    string                 `json:"created_at"`
 	UpdatedAt    string                 `json:"updated_at"`
+}
+
+type ServerConnection = TunnelConnection
+
+type LocalTunnel struct {
+	ID                 int64  `json:"id"`
+	Name               string `json:"name"`
+	ServerConnectionID int64  `json:"server_connection_id"`
+	ServerTunnelID     int64  `json:"server_tunnel_id"`
+	LocalHost          string `json:"local_host"`
+	LocalPort          int    `json:"local_port"`
+	Enabled            bool   `json:"enabled"`
+	LastError          string `json:"last_error"`
+	Remark             string `json:"remark"`
+	CreatedAt          string `json:"created_at"`
+	UpdatedAt          string `json:"updated_at"`
 }
 
 type AuditLog struct {

@@ -291,11 +291,11 @@ func authMe(t *testing.T, router http.Handler, path string, authorization string
 
 func assertAuditLogCount(t *testing.T, database *sql.DB, want int) {
 	t.Helper()
-	var count int
-	if err := database.QueryRow("SELECT COUNT(1) FROM audit_logs").Scan(&count); err != nil {
-		t.Fatalf("count audit logs: %v", err)
+	_, total, err := db.ListAuditLogs(context.Background(), database, 100, 0)
+	if err != nil {
+		t.Fatalf("list audit logs: %v", err)
 	}
-	if count != want {
-		t.Fatalf("audit log count=%d want=%d", count, want)
+	if int(total) != want {
+		t.Fatalf("audit log count=%d want=%d", total, want)
 	}
 }

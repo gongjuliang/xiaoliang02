@@ -25,14 +25,16 @@ func (m *Manager) openDataConnection(ctx context.Context, connection model.Serve
 }
 
 func (m *Manager) forwardDataConnection(ctx context.Context, connection model.ServerConnection, writer *controlWriter, command protocol.Message, dataOpen protocol.DataOpen) error {
-	if strings.TrimSpace(dataOpen.LocalHost) == "" || dataOpen.LocalPort <= 0 {
-		return fmt.Errorf("invalid data_open local target")
-	}
 	if strings.TrimSpace(command.ConnectionID) == "" || command.TunnelID <= 0 {
 		return fmt.Errorf("invalid data_open connection metadata")
 	}
+	resolvedOpen, err := m.resolveLocalDataOpen(ctx, connection, command, dataOpen)
+	if err != nil {
+		_ = sendDataClose(writer, command, protocol.CodeLocalServiceUnavailable, err.Error())
+		return err
+	}
 
-	dataConn, err := m.dialData(ctx, connection, dataOpen)
+	dataConn, err := m.dialData(ctx, connection, resolvedOpen)
 	if err != nil {
 		return fmt.Errorf("dial data server: %w", err)
 	}
@@ -54,7 +56,7 @@ func (m *Manager) forwardDataConnection(ctx context.Context, connection model.Se
 	defer m.removeDataConnection(command.ConnectionID, session)
 	defer session.close()
 
-	localConn, err := m.dialLocal(ctx, dataOpen)
+	localConn, err := m.dialLocal(ctx, resolvedOpen)
 	if err != nil {
 		_ = sendDataClose(writer, command, protocol.CodeLocalServiceUnavailable, err.Error())
 		return fmt.Errorf("dial local service: %w", err)
@@ -77,6 +79,19 @@ func (m *Manager) forwardDataConnection(ctx context.Context, connection model.Se
 
 	proxyRawTCP(dataConn, localConn)
 	return nil
+}
+
+func (m *Manager) resolveLocalDataOpen(ctx context.Context, connection model.ServerConnection, command protocol.Message, dataOpen protocol.DataOpen) (protocol.DataOpen, error) {
+	// The service side owns only the public listener. The client deliberately
+	// resolves the private target from this tunnel connection so a server cannot
+	// push an arbitrary LAN address through data_open.
+	if strings.TrimSpace(connection.LocalHost) == "" || connection.LocalPort <= 0 {
+		return protocol.DataOpen{}, fmt.Errorf("invalid local tunnel target")
+	}
+	resolved := dataOpen
+	resolved.LocalHost = strings.TrimSpace(connection.LocalHost)
+	resolved.LocalPort = connection.LocalPort
+	return resolved, nil
 }
 
 func (m *Manager) registerDataConnection(connectionID string, dataConn net.Conn) *activeDataConnection {

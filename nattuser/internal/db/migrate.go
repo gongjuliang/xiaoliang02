@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS users (
 	updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE TABLE IF NOT EXISTS server_connections (
+CREATE TABLE IF NOT EXISTS tunnel_connections (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	name TEXT NOT NULL,
 	server_host TEXT NOT NULL,
@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS server_connections (
 	data_port INTEGER NOT NULL,
 	use_tls INTEGER NOT NULL DEFAULT 0,
 	client_secret TEXT NOT NULL,
+	local_host TEXT NOT NULL,
+	local_port INTEGER NOT NULL,
 	status TEXT NOT NULL DEFAULT 'stopped',
 	auto_start INTEGER NOT NULL DEFAULT 0,
 	last_error TEXT,
@@ -68,7 +70,7 @@ CREATE TABLE IF NOT EXISTS settings (
 	updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_server_connections_status ON server_connections(status);
+CREATE INDEX IF NOT EXISTS idx_tunnel_connections_status ON tunnel_connections(status);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);
 
 CREATE TRIGGER IF NOT EXISTS trg_users_updated_at
@@ -79,12 +81,12 @@ BEGIN
 	UPDATE users SET updated_at = datetime('now') WHERE id = OLD.id;
 END;
 
-CREATE TRIGGER IF NOT EXISTS trg_server_connections_updated_at
-AFTER UPDATE ON server_connections
+CREATE TRIGGER IF NOT EXISTS trg_tunnel_connections_updated_at
+AFTER UPDATE ON tunnel_connections
 FOR EACH ROW
 WHEN NEW.updated_at = OLD.updated_at
 BEGIN
-	UPDATE server_connections SET updated_at = datetime('now') WHERE id = OLD.id;
+	UPDATE tunnel_connections SET updated_at = datetime('now') WHERE id = OLD.id;
 END;
 
 CREATE TRIGGER IF NOT EXISTS trg_settings_updated_at
@@ -93,6 +95,43 @@ FOR EACH ROW
 WHEN NEW.updated_at = OLD.updated_at
 BEGIN
 	UPDATE settings SET updated_at = datetime('now') WHERE key = OLD.key;
+END;
+`,
+	},
+	{
+		Version: 3,
+		Name:    "reset_to_tunnel_connections",
+		SQL: `
+DROP TABLE IF EXISTS local_tunnels;
+DROP TABLE IF EXISTS server_connections;
+DROP TABLE IF EXISTS tunnel_connections;
+
+CREATE TABLE tunnel_connections (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	name TEXT NOT NULL,
+	server_host TEXT NOT NULL,
+	server_port INTEGER NOT NULL,
+	data_port INTEGER NOT NULL,
+	use_tls INTEGER NOT NULL DEFAULT 0,
+	client_secret TEXT NOT NULL,
+	local_host TEXT NOT NULL,
+	local_port INTEGER NOT NULL,
+	status TEXT NOT NULL DEFAULT 'stopped',
+	auto_start INTEGER NOT NULL DEFAULT 0,
+	last_error TEXT,
+	remark TEXT,
+	created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+	updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_tunnel_connections_status ON tunnel_connections(status);
+
+CREATE TRIGGER IF NOT EXISTS trg_tunnel_connections_updated_at
+AFTER UPDATE ON tunnel_connections
+FOR EACH ROW
+WHEN NEW.updated_at = OLD.updated_at
+BEGIN
+	UPDATE tunnel_connections SET updated_at = datetime('now') WHERE id = OLD.id;
 END;
 `,
 	},

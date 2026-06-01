@@ -112,8 +112,6 @@ func TestServerMCPCreatesStartsStopsAndDeletesTunnelWithAuditLogs(t *testing.T) 
 		"name":        "mcp-created",
 		"client_id":   1,
 		"protocol":    "tcp",
-		"local_host":  "127.0.0.1",
-		"local_port":  9000,
 		"remote_host": "0.0.0.0",
 		"remote_port": 18081,
 		"auto_start":  true,
@@ -186,9 +184,13 @@ func setupServerMCPRouter(t *testing.T) (http.Handler, *sql.DB) {
 	t.Helper()
 
 	ctx := context.Background()
-	database, err := db.Open(ctx, filepath.Join(t.TempDir(), "server.db"), nil)
+	dir := t.TempDir()
+	database, err := db.Open(ctx, filepath.Join(dir, "server.db"), nil)
 	if err != nil {
 		t.Fatalf("open database: %v", err)
+	}
+	if err := db.ConfigureAuditLogDir(ctx, database, filepath.Join(dir, "logs")); err != nil {
+		t.Fatalf("configure audit log dir: %v", err)
 	}
 
 	secretHash, err := auth.HashPassword("client-secret")
@@ -210,8 +212,6 @@ func setupServerMCPRouter(t *testing.T) (http.Handler, *sql.DB) {
 		Name:       "mcp-tunnel",
 		ClientID:   client.ID,
 		Protocol:   model.TunnelProtocolTCP,
-		LocalHost:  "127.0.0.1",
-		LocalPort:  8080,
 		RemoteHost: "0.0.0.0",
 		RemotePort: 18080,
 	}); err != nil {
@@ -245,7 +245,7 @@ func callServerMCP(t *testing.T, handler http.Handler, token string, tool string
 	if err != nil {
 		t.Fatalf("encode request: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodPost, "/tools/call", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/mcp/tools/call", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)

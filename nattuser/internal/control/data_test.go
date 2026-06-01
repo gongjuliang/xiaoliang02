@@ -3,6 +3,7 @@ package control
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -52,11 +53,12 @@ func TestManagerOpensDataConnectionAndForwardsToLocalTCPService(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create server connection: %v", err)
 	}
+	createLocalTunnelBinding(t, ctx, database, connection.ID, 7, localHost, localPort, true)
 
 	dataDone := make(chan error, 1)
 	go runFakeDataServer(t, dataListener, dataDone)
 	controlDone := make(chan error, 1)
-	go runDataOpenControlServer(t, controlListener, localHost, localPort, dataHost, dataPort, controlDone)
+	go runDataOpenControlServer(t, controlListener, dataHost, dataPort, controlDone)
 
 	cfg := config.Default()
 	manager := NewManagerWithOptions(cfg, database, nil, Options{
@@ -72,16 +74,7 @@ func TestManagerOpensDataConnectionAndForwardsToLocalTCPService(t *testing.T) {
 		managerDone <- manager.Run(runCtx)
 	}()
 
-	select {
-	case err := <-dataDone:
-		if err != nil {
-			t.Fatalf("fake data server failed: %v", err)
-		}
-	case err := <-controlDone:
-		t.Fatalf("fake control server failed before data flow: %v", err)
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for data forwarding")
-	}
+	waitForDataDone(t, dataDone, controlDone)
 
 	stored, err := db.GetServerConnectionByID(ctx, database, connection.ID)
 	if err != nil {
@@ -131,21 +124,23 @@ func TestManagerSendsDataCloseWhenLocalTCPServiceIsUnavailable(t *testing.T) {
 	defer controlListener.Close()
 	controlHost, controlPort := splitHostPort(t, controlListener.Addr().String())
 
-	if _, err := db.CreateServerConnection(ctx, database, db.CreateServerConnectionParams{
+	connection, err := db.CreateServerConnection(ctx, database, db.CreateServerConnectionParams{
 		Name:         "test-server",
 		ServerHost:   controlHost,
 		ServerPort:   controlPort,
 		DataPort:     dataPort,
 		ClientSecret: "natt_client_secret",
 		AutoStart:    true,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("create server connection: %v", err)
 	}
+	createLocalTunnelBinding(t, ctx, database, connection.ID, 7, localHost, localPort, true)
 
 	dataDone := make(chan error, 1)
 	go expectDataBindOnly(t, dataListener, dataDone)
 	closeDone := make(chan error, 1)
-	go runDataCloseControlServer(t, controlListener, localHost, localPort, dataHost, dataPort, closeDone)
+	go runDataCloseControlServer(t, controlListener, dataHost, dataPort, closeDone)
 
 	cfg := config.Default()
 	manager := NewManagerWithOptions(cfg, database, nil, Options{
@@ -209,22 +204,24 @@ func TestManagerClosesDataConnectionWhenServerSendsDataClose(t *testing.T) {
 	defer controlListener.Close()
 	controlHost, controlPort := splitHostPort(t, controlListener.Addr().String())
 
-	if _, err := db.CreateServerConnection(ctx, database, db.CreateServerConnectionParams{
+	connection, err := db.CreateServerConnection(ctx, database, db.CreateServerConnectionParams{
 		Name:         "test-server",
 		ServerHost:   controlHost,
 		ServerPort:   controlPort,
 		DataPort:     dataPort,
 		ClientSecret: "natt_client_secret",
 		AutoStart:    true,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("create server connection: %v", err)
 	}
+	createLocalTunnelBinding(t, ctx, database, connection.ID, 7, localHost, localPort, true)
 
 	dataBound := make(chan struct{})
 	dataDone := make(chan error, 1)
 	go expectDataConnectionClosedAfterBind(t, dataListener, "conn-close", dataBound, dataDone)
 	controlDone := make(chan error, 1)
-	go runServerDataCloseControlServer(t, controlListener, localHost, localPort, dataHost, dataPort, dataBound, controlDone)
+	go runServerDataCloseControlServer(t, controlListener, dataHost, dataPort, dataBound, controlDone)
 
 	cfg := config.Default()
 	manager := NewManagerWithOptions(cfg, database, nil, Options{
@@ -253,7 +250,73 @@ func TestManagerClosesDataConnectionWhenServerSendsDataClose(t *testing.T) {
 	}
 }
 
-func runDataOpenControlServer(t *testing.T, listener net.Listener, localHost string, localPort int, dataHost string, dataPort int, done chan<- error) {
+func TestManagerSendsDataCloseWhenLocalTunnelBindingIsMissing(t *testing.T) {
+	ctx := context.Background()
+	database, err := db.Open(ctx, filepath.Join(t.TempDir(), "test.db"), nil)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer database.Close()
+
+	dataHost := "127.0.0.1"
+	dataPort := 1
+
+	controlListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen fake control server: %v", err)
+	}
+	defer controlListener.Close()
+	controlHost, controlPort := splitHostPort(t, controlListener.Addr().String())
+
+	if _, err := db.CreateServerConnection(ctx, database, db.CreateServerConnectionParams{
+		Name:         "test-server",
+		ServerHost:   controlHost,
+		ServerPort:   controlPort,
+		DataPort:     dataPort,
+		ClientSecret: "natt_client_secret",
+		AutoStart:    true,
+	}); err != nil {
+		t.Fatalf("create server connection: %v", err)
+	}
+
+	closeDone := make(chan error, 1)
+	go runDataCloseControlServer(t, controlListener, dataHost, dataPort, closeDone)
+
+	cfg := config.Default()
+	manager := NewManagerWithOptions(cfg, database, nil, Options{
+		ScanInterval:      10 * time.Millisecond,
+		ReconnectInterval: 20 * time.Millisecond,
+		DialTimeout:       100 * time.Millisecond,
+		HeartbeatInterval: time.Second,
+	})
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	managerDone := make(chan error, 1)
+	go func() {
+		managerDone <- manager.Run(runCtx)
+	}()
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("fake control server failed: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for data_close")
+	}
+
+	cancel()
+	select {
+	case err := <-managerDone:
+		if err != nil {
+			t.Fatalf("manager run returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for manager shutdown")
+	}
+}
+
+func runDataOpenControlServer(t *testing.T, listener net.Listener, dataHost string, dataPort int, done chan<- error) {
 	t.Helper()
 	defer close(done)
 
@@ -295,10 +358,8 @@ func runDataOpenControlServer(t *testing.T, listener net.Listener, localHost str
 		return
 	}
 	dataOpen, err := protocol.NewMessage(protocol.TypeDataOpen, 42, 7, "conn-1", protocol.DataOpen{
-		DataHost:  dataHost,
-		DataPort:  dataPort,
-		LocalHost: localHost,
-		LocalPort: localPort,
+		DataHost: dataHost,
+		DataPort: dataPort,
 	})
 	if err != nil {
 		done <- err
@@ -358,7 +419,7 @@ func runFakeDataServer(t *testing.T, listener net.Listener, done chan<- error) {
 	done <- nil
 }
 
-func runDataCloseControlServer(t *testing.T, listener net.Listener, localHost string, localPort int, dataHost string, dataPort int, done chan<- error) {
+func runDataCloseControlServer(t *testing.T, listener net.Listener, dataHost string, dataPort int, done chan<- error) {
 	t.Helper()
 	defer close(done)
 
@@ -391,10 +452,8 @@ func runDataCloseControlServer(t *testing.T, listener net.Listener, localHost st
 		return
 	}
 	dataOpen, err := protocol.NewMessage(protocol.TypeDataOpen, 42, 7, "conn-unavailable", protocol.DataOpen{
-		DataHost:  dataHost,
-		DataPort:  dataPort,
-		LocalHost: localHost,
-		LocalPort: localPort,
+		DataHost: dataHost,
+		DataPort: dataPort,
 	})
 	if err != nil {
 		done <- err
@@ -448,7 +507,7 @@ func expectDataBindOnly(t *testing.T, listener net.Listener, done chan<- error) 
 	select {}
 }
 
-func runServerDataCloseControlServer(t *testing.T, listener net.Listener, localHost string, localPort int, dataHost string, dataPort int, dataBound <-chan struct{}, done chan<- error) {
+func runServerDataCloseControlServer(t *testing.T, listener net.Listener, dataHost string, dataPort int, dataBound <-chan struct{}, done chan<- error) {
 	t.Helper()
 	defer close(done)
 
@@ -481,10 +540,8 @@ func runServerDataCloseControlServer(t *testing.T, listener net.Listener, localH
 		return
 	}
 	dataOpen, err := protocol.NewMessage(protocol.TypeDataOpen, 42, 7, "conn-close", protocol.DataOpen{
-		DataHost:  dataHost,
-		DataPort:  dataPort,
-		LocalHost: localHost,
-		LocalPort: localPort,
+		DataHost: dataHost,
+		DataPort: dataPort,
 	})
 	if err != nil {
 		done <- err
@@ -613,5 +670,19 @@ func waitForDataDone(t *testing.T, dataDone <-chan error, controlDone <-chan err
 		case <-deadline:
 			t.Fatal("timed out waiting for data connection close")
 		}
+	}
+}
+
+func createLocalTunnelBinding(t *testing.T, ctx context.Context, database *sql.DB, serverConnectionID int64, serverTunnelID int64, localHost string, localPort int, enabled bool) {
+	t.Helper()
+	if _, err := db.CreateLocalTunnel(ctx, database, db.CreateLocalTunnelParams{
+		Name:               fmt.Sprintf("local-%d", serverTunnelID),
+		ServerConnectionID: serverConnectionID,
+		ServerTunnelID:     serverTunnelID,
+		LocalHost:          localHost,
+		LocalPort:          localPort,
+		Enabled:            enabled,
+	}); err != nil {
+		t.Fatalf("create local tunnel binding: %v", err)
 	}
 }

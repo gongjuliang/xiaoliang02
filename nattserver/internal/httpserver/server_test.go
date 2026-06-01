@@ -25,6 +25,7 @@ func TestHTTPServerServesHealthEndpoint(t *testing.T) {
 	cfg.HTTP.Port = freeHTTPPort(t)
 	cfg.HTTP.ShutdownTimeoutSeconds = 1
 	cfg.Database.Path = filepath.Join(dir, "test.db")
+	cfg.Log.Dir = filepath.Join(dir, "logs")
 	cfg.Auth.SM2PrivateKeyFile = filepath.Join(dir, "sm2_private.pem")
 	cfg.Auth.SM2PublicKeyFile = filepath.Join(dir, "sm2_public.pem")
 

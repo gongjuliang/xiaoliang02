@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"nattserver/internal/config"
+	"nattserver/internal/db"
 	"nattserver/internal/logger"
+	"nattserver/internal/mcp"
 
 	"github.com/gin-gonic/gin"
 )
@@ -18,7 +20,6 @@ func NewRouter(cfg *config.Config, database *sql.DB, log *logger.Logger) *gin.En
 
 type Runtime interface {
 	TunnelRuntime
-	ClientConnectionCloser
 }
 
 func NewRouterWithRuntime(cfg *config.Config, database *sql.DB, log *logger.Logger, runtime Runtime) *gin.Engine {
@@ -31,6 +32,9 @@ func NewRouterWithRuntime(cfg *config.Config, database *sql.DB, log *logger.Logg
 	router.Use(RequestLogMiddleware(log))
 	router.Use(RecoveryMiddleware(log))
 	router.Use(corsMiddleware())
+	if err := db.ConfigureAuditLogDir(context.Background(), database, cfg.Log.Dir); err != nil {
+		panic(err)
+	}
 	registerFrontendRoutes(router)
 	router.GET("/health", healthHandler(database))
 
@@ -48,10 +52,10 @@ func NewRouterWithRuntime(cfg *config.Config, database *sql.DB, log *logger.Logg
 
 		protected := v1.Group("")
 		protected.Use(authHandler.JWTMiddleware())
-		NewClientHandler(database, log, runtime).RegisterRoutes(protected)
 		NewTunnelHandler(database, log, &cfg.Tunnel, runtime).RegisterRoutes(protected)
 		NewOpsHandler(database, log, cfg).RegisterRoutes(protected)
 	}
+	mcp.RegisterServerRoutes(router, database, log, runtime, cfg.Tunnel)
 
 	router.NoRoute(func(c *gin.Context) {
 		Fail(c, http.StatusNotFound, 40401, "resource not found")

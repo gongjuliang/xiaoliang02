@@ -24,7 +24,7 @@ type Config struct {
 	Auth     AuthConfig     `yaml:"auth" json:"auth"`
 	Protocol ProtocolConfig `yaml:"protocol" json:"protocol"`
 	Tunnel   TunnelConfig   `yaml:"tunnel" json:"tunnel"`
-	MCP      MCPConfig      `yaml:"mcp" json:"mcp"`
+	MCP      MCPConfig      `yaml:"-" json:"-"`
 }
 
 type AppConfig struct {
@@ -81,10 +81,10 @@ type TunnelConfig struct {
 }
 
 type MCPConfig struct {
-	Enabled     bool   `yaml:"enabled" json:"enabled"`
-	Host        string `yaml:"host" json:"host"`
-	Port        int    `yaml:"port" json:"port"`
-	AccessToken string `yaml:"access_token" json:"access_token"`
+	Enabled     bool   `yaml:"-" json:"-"`
+	Host        string `yaml:"-" json:"-"`
+	Port        int    `yaml:"-" json:"-"`
+	AccessToken string `yaml:"-" json:"-"`
 }
 
 func Load(path string) (*Config, error) {
@@ -176,11 +176,6 @@ func Default() *Config {
 			RemotePortMin: 10000,
 			RemotePortMax: 60000,
 		},
-		MCP: MCPConfig{
-			Enabled: false,
-			Host:    "127.0.0.1",
-			Port:    8081,
-		},
 	}
 }
 
@@ -226,17 +221,6 @@ func (c *Config) Validate() error {
 	}
 	if c.Protocol.TLS.Enabled && (c.Protocol.TLS.CertFile == "" || c.Protocol.TLS.KeyFile == "") {
 		return fmt.Errorf("protocol TLS requires cert_file and key_file")
-	}
-	if c.MCP.Enabled {
-		if c.MCP.Host == "" {
-			return fmt.Errorf("mcp.host is required when MCP is enabled")
-		}
-		if !validPort(c.MCP.Port) {
-			return fmt.Errorf("mcp.port must be between 1 and 65535 when MCP is enabled")
-		}
-		if c.MCP.AccessToken == "" {
-			return fmt.Errorf("mcp.access_token is required when MCP is enabled")
-		}
 	}
 	return nil
 }

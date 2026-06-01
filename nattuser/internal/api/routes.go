@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"nattuser/internal/config"
+	"nattuser/internal/db"
 	"nattuser/internal/logger"
+	"nattuser/internal/mcp"
 
 	"github.com/gin-gonic/gin"
 )
@@ -22,6 +24,9 @@ func NewRouter(cfg *config.Config, database *sql.DB, log *logger.Logger) *gin.En
 	router.Use(RequestLogMiddleware(log))
 	router.Use(RecoveryMiddleware(log))
 	router.Use(corsMiddleware())
+	if err := db.ConfigureAuditLogDir(context.Background(), database, cfg.Log.Dir); err != nil {
+		panic(err)
+	}
 	registerFrontendRoutes(router)
 	router.GET("/health", healthHandler(database))
 
@@ -42,6 +47,7 @@ func NewRouter(cfg *config.Config, database *sql.DB, log *logger.Logger) *gin.En
 		NewServerHandler(database, log, &cfg.ServerDefaults).RegisterRoutes(protected)
 		NewOpsHandler(database, log, cfg).RegisterRoutes(protected)
 	}
+	mcp.RegisterClientRoutes(router, database, log)
 
 	router.NoRoute(func(c *gin.Context) {
 		Fail(c, http.StatusNotFound, 40401, "resource not found")

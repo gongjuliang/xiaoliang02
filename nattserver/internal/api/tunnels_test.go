@@ -27,8 +27,6 @@ func TestTunnelManagementFlow(t *testing.T) {
 	createBody := map[string]any{
 		"name":        "web-8080",
 		"client_id":   createdClient.Client.ID,
-		"local_host":  "127.0.0.1",
-		"local_port":  8080,
 		"remote_port": 18080,
 		"auto_start":  true,
 		"remark":      "local web",
@@ -58,8 +56,6 @@ func TestTunnelManagementFlow(t *testing.T) {
 		"name":        "web-9090",
 		"client_id":   createdClient.Client.ID,
 		"protocol":    "tcp",
-		"local_host":  "127.0.0.1",
-		"local_port":  9090,
 		"remote_host": "0.0.0.0",
 		"remote_port": 19090,
 		"auto_start":  false,
@@ -67,7 +63,7 @@ func TestTunnelManagementFlow(t *testing.T) {
 	})
 	var updated model.Tunnel
 	decodeResponseData(t, updateResp, &updated)
-	if updated.Name != "web-9090" || updated.LocalPort != 9090 || updated.RemotePort != 19090 || updated.AutoStart {
+	if updated.Name != "web-9090" || updated.RemotePort != 19090 || updated.AutoStart {
 		t.Fatalf("unexpected updated tunnel: %+v", updated)
 	}
 
@@ -108,11 +104,36 @@ func TestTunnelCreateRejectsPortOutsideConfiguredRange(t *testing.T) {
 	resp := authorizedJSONAllowStatus(t, router, http.MethodPost, "/api/server/v1/tunnels", tokens.AccessToken, map[string]any{
 		"name":        "bad-port",
 		"client_id":   createdClient.Client.ID,
-		"local_host":  "127.0.0.1",
-		"local_port":  8080,
 		"remote_port": 9999,
 	}, http.StatusBadRequest)
 	assertResponseCode(t, resp, CodeBadRequest)
+}
+
+func TestTunnelCreateIgnoresLegacyLocalTargetFields(t *testing.T) {
+	router, database, tokens := setupAuthenticatedServerRouter(t)
+	defer database.Close()
+
+	clientResp := authorizedJSON(t, router, http.MethodPost, "/api/server/v1/clients", tokens.AccessToken, map[string]string{
+		"name": "office-client",
+	})
+	var createdClient clientSecretResponse
+	decodeResponseData(t, clientResp, &createdClient)
+
+	resp := authorizedJSON(t, router, http.MethodPost, "/api/server/v1/tunnels", tokens.AccessToken, map[string]any{
+		"name":        "web-no-local",
+		"client_id":   createdClient.Client.ID,
+		"local_host":  "10.1.2.3",
+		"local_port":  1234,
+		"remote_port": 18081,
+	})
+	var created map[string]any
+	decodeResponseData(t, resp, &created)
+	if _, ok := created["local_host"]; ok {
+		t.Fatalf("server tunnel response still exposes local_host: %+v", created)
+	}
+	if _, ok := created["local_port"]; ok {
+		t.Fatalf("server tunnel response still exposes local_port: %+v", created)
+	}
 }
 
 func TestTunnelStartReturnsClearConflictErrors(t *testing.T) {
@@ -147,8 +168,6 @@ func TestTunnelStartReturnsClearConflictErrors(t *testing.T) {
 			createResp := authorizedJSON(t, router, http.MethodPost, "/api/server/v1/tunnels", tokens.AccessToken, map[string]any{
 				"name":        "web-8080",
 				"client_id":   createdClient.Client.ID,
-				"local_host":  "127.0.0.1",
-				"local_port":  8080,
 				"remote_port": 18080,
 			})
 			var created model.Tunnel

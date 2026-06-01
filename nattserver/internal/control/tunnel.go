@@ -28,7 +28,6 @@ type activeTunnel struct {
 }
 
 type pendingDataConn struct {
-	clientID     int64
 	tunnelID     int64
 	connectionID string
 	publicConn   net.Conn
@@ -42,8 +41,6 @@ type pendingDataConn struct {
 type tunnelCommandPayload struct {
 	Name       string `json:"name"`
 	Protocol   string `json:"protocol"`
-	LocalHost  string `json:"local_host"`
-	LocalPort  int    `json:"local_port"`
 	RemoteHost string `json:"remote_host"`
 	RemotePort int    `json:"remote_port"`
 }
@@ -85,12 +82,12 @@ func (s *Server) StartTunnel(ctx context.Context, id int64) (model.Tunnel, error
 		conns:    make(map[string][]net.Conn),
 	}
 
-	startCommand, err := protocol.NewMessage(protocol.TypeTunnelStart, tunnel.ClientID, tunnel.ID, "", tunnelPayload(tunnel))
+	startCommand, err := protocol.NewMessage(protocol.TypeTunnelStart, 0, tunnel.ID, "", tunnelPayload(tunnel))
 	if err != nil {
 		_ = listener.Close()
 		return s.markTunnelError(ctx, tunnel.ID, err)
 	}
-	if err := s.SendToClient(tunnel.ClientID, startCommand); err != nil {
+	if err := s.SendToClient(tunnel.ID, startCommand); err != nil {
 		_ = listener.Close()
 		return s.markTunnelError(ctx, tunnel.ID, err)
 	}
@@ -117,31 +114,31 @@ func (s *Server) StopTunnel(ctx context.Context, id int64) (model.Tunnel, error)
 		// Tell the client to close any per-connection data sockets before the
 		// listener is stopped, so both halves release resources promptly.
 		for _, connectionID := range active.connectionIDs() {
-			s.sendDataClose(tunnel.ClientID, tunnel.ID, connectionID, protocol.CodeOK, "tunnel stopped")
+			s.sendDataClose(tunnel.ID, connectionID, protocol.CodeOK, "tunnel stopped")
 		}
 		active.stop()
 	}
 
-	stopCommand, err := protocol.NewMessage(protocol.TypeTunnelStop, tunnel.ClientID, tunnel.ID, "", tunnelPayload(tunnel))
+	stopCommand, err := protocol.NewMessage(protocol.TypeTunnelStop, 0, tunnel.ID, "", tunnelPayload(tunnel))
 	if err == nil {
-		if err := s.SendToClient(tunnel.ClientID, stopCommand); err != nil {
-			s.logError("send tunnel_stop failed client_id=%d tunnel_id=%d: %v", tunnel.ClientID, tunnel.ID, err)
+		if err := s.SendToClient(tunnel.ID, stopCommand); err != nil {
+			s.logError("send tunnel_stop failed tunnel_id=%d: %v", tunnel.ID, err)
 		}
 	}
 	return db.SetTunnelStatus(ctx, s.database, id, model.TunnelStatusStopped, "")
 }
 
-func (s *Server) sendDataClose(clientID int64, tunnelID int64, connectionID string, code string, message string) {
-	dataClose, err := protocol.NewMessage(protocol.TypeDataClose, clientID, tunnelID, connectionID, protocol.DataClose{
+func (s *Server) sendDataClose(tunnelID int64, connectionID string, code string, message string) {
+	dataClose, err := protocol.NewMessage(protocol.TypeDataClose, 0, tunnelID, connectionID, protocol.DataClose{
 		Code:    code,
 		Message: message,
 	})
 	if err != nil {
-		s.logError("build data_close failed client_id=%d tunnel_id=%d connection_id=%s: %v", clientID, tunnelID, connectionID, err)
+		s.logError("build data_close failed tunnel_id=%d connection_id=%s: %v", tunnelID, connectionID, err)
 		return
 	}
-	if err := s.SendToClient(clientID, dataClose); err != nil {
-		s.logError("send data_close failed client_id=%d tunnel_id=%d connection_id=%s: %v", clientID, tunnelID, connectionID, err)
+	if err := s.SendToClient(tunnelID, dataClose); err != nil {
+		s.logError("send data_close failed tunnel_id=%d connection_id=%s: %v", tunnelID, connectionID, err)
 	}
 }
 
@@ -167,7 +164,6 @@ func (s *Server) acceptTunnel(active *activeTunnel) {
 func (s *Server) handlePublicConn(active *activeTunnel, publicConn net.Conn) {
 	connectionID := protocol.NewRequestID()
 	pending := &pendingDataConn{
-		clientID:     active.tunnel.ClientID,
 		tunnelID:     active.tunnel.ID,
 		connectionID: connectionID,
 		publicConn:   publicConn,
@@ -182,18 +178,16 @@ func (s *Server) handlePublicConn(active *activeTunnel, publicConn net.Conn) {
 
 	// Each external TCP connection gets a fresh connection_id. The client opens
 	// a matching data socket and binds it back with data_bind before proxying.
-	dataOpen, err := protocol.NewMessage(protocol.TypeDataOpen, active.tunnel.ClientID, active.tunnel.ID, connectionID, protocol.DataOpen{
-		DataHost:  advertisedDataHost(s.cfg.DataHost),
-		DataPort:  s.cfg.DataPort,
-		LocalHost: active.tunnel.LocalHost,
-		LocalPort: active.tunnel.LocalPort,
+	dataOpen, err := protocol.NewMessage(protocol.TypeDataOpen, 0, active.tunnel.ID, connectionID, protocol.DataOpen{
+		DataHost: advertisedDataHost(s.cfg.DataHost),
+		DataPort: s.cfg.DataPort,
 	})
 	if err != nil {
 		_ = publicConn.Close()
 		s.recordTunnelRuntimeError(active.tunnel.ID, err)
 		return
 	}
-	if err := s.SendToClient(active.tunnel.ClientID, dataOpen); err != nil {
+	if err := s.SendToClient(active.tunnel.ID, dataOpen); err != nil {
 		_ = publicConn.Close()
 		s.recordTunnelRuntimeError(active.tunnel.ID, err)
 		return
@@ -249,18 +243,13 @@ func (s *Server) handleDataConn(ctx context.Context, conn net.Conn) {
 		_ = writeWithDeadline(conn, protocol.NewErrorMessage(message.RequestID, protocol.CodeBadRequest, "invalid data_bind payload"))
 		return
 	}
-	client, err := db.AuthenticateClientSecret(ctx, s.database, bind.ClientSecret)
+	key, err := db.AuthenticateTunnelSecret(ctx, s.database, bind.ClientSecret)
 	if err != nil {
 		_ = writeWithDeadline(conn, protocol.NewErrorMessage(message.RequestID, protocol.CodeUnauthorized, "unauthorized"))
 		return
 	}
-	if message.ClientID != 0 && message.ClientID != client.ID {
-		_ = writeWithDeadline(conn, protocol.NewErrorMessage(message.RequestID, protocol.CodeUnauthorized, "client_id mismatch"))
-		return
-	}
-
 	pending := s.getPending(message.ConnectionID)
-	if pending == nil || pending.clientID != client.ID || pending.tunnelID != message.TunnelID {
+	if pending == nil || pending.tunnelID != key.TunnelID || pending.tunnelID != message.TunnelID {
 		_ = writeWithDeadline(conn, protocol.NewErrorMessage(message.RequestID, protocol.CodeBadRequest, "data connection is not expected"))
 		return
 	}
@@ -334,11 +323,11 @@ func (s *Server) stopAllTunnels() {
 	}
 }
 
-func (s *Server) stopClientTunnels(clientID int64) {
+func (s *Server) stopTunnelRuntime(tunnelID int64) {
 	s.tunnelMu.Lock()
 	active := make([]*activeTunnel, 0)
 	for id, tunnel := range s.tunnels {
-		if tunnel.tunnel.ClientID == clientID {
+		if tunnel.tunnel.ID == tunnelID {
 			active = append(active, tunnel)
 			delete(s.tunnels, id)
 		}
@@ -521,8 +510,6 @@ func tunnelPayload(tunnel model.Tunnel) tunnelCommandPayload {
 	return tunnelCommandPayload{
 		Name:       tunnel.Name,
 		Protocol:   string(tunnel.Protocol),
-		LocalHost:  tunnel.LocalHost,
-		LocalPort:  tunnel.LocalPort,
 		RemoteHost: tunnel.RemoteHost,
 		RemotePort: tunnel.RemotePort,
 	}

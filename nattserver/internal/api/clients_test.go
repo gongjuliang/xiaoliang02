@@ -104,6 +104,8 @@ func setupAuthenticatedServerRouterWithRuntime(t *testing.T, runtime Runtime) (*
 	cfg.Auth.JWTSecret = "test-secret"
 	cfg.Auth.SM2PrivateKeyFile = filepath.Join(dir, "sm2_private.pem")
 	cfg.Auth.SM2PublicKeyFile = filepath.Join(dir, "sm2_public.pem")
+	cfg.MCP.Enabled = true
+	cfg.MCP.AccessToken = "server-mcp-token"
 
 	database, err := db.Open(context.Background(), cfg.Database.Path, nil)
 	if err != nil {

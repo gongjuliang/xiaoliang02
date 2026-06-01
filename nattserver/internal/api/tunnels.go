@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"nattserver/internal/auth"
 	"nattserver/internal/config"
 	"nattserver/internal/db"
 	"nattserver/internal/logger"
@@ -31,14 +32,17 @@ type TunnelRuntime interface {
 
 type tunnelRequest struct {
 	Name       string `json:"name" binding:"required"`
-	ClientID   int64  `json:"client_id" binding:"required"`
 	Protocol   string `json:"protocol"`
-	LocalHost  string `json:"local_host" binding:"required"`
-	LocalPort  int    `json:"local_port" binding:"required"`
 	RemoteHost string `json:"remote_host"`
 	RemotePort int    `json:"remote_port" binding:"required"`
 	AutoStart  bool   `json:"auto_start"`
 	Remark     string `json:"remark"`
+}
+
+type tunnelSecretResponse struct {
+	Tunnel model.Tunnel    `json:"tunnel"`
+	Key    model.TunnelKey `json:"key"`
+	Secret string          `json:"secret"`
 }
 
 func NewTunnelHandler(database *sql.DB, log *logger.Logger, cfg *config.TunnelConfig, runtime TunnelRuntime) *TunnelHandler {
@@ -57,6 +61,9 @@ func (h *TunnelHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.DELETE("/tunnels/:id", h.delete)
 	group.POST("/tunnels/:id/start", h.start)
 	group.POST("/tunnels/:id/stop", h.stop)
+	group.POST("/tunnels/:id/rotate-secret", h.rotateSecret)
+	group.POST("/tunnels/:id/enable-key", h.enableKey)
+	group.POST("/tunnels/:id/disable-key", h.disableKey)
 }
 
 func (h *TunnelHandler) list(c *gin.Context) {
@@ -66,11 +73,7 @@ func (h *TunnelHandler) list(c *gin.Context) {
 		return
 	}
 	page.Normalize()
-	clientID, ok := parseOptionalInt64Query(c, "client_id")
-	if !ok {
-		return
-	}
-	tunnels, total, err := db.ListTunnels(c.Request.Context(), h.database, clientID, page.Limit(), page.Offset())
+	tunnels, total, err := db.ListTunnels(c.Request.Context(), h.database, 0, page.Limit(), page.Offset())
 	if err != nil {
 		h.writeDBError(c, err, "list tunnels failed")
 		return
@@ -83,17 +86,9 @@ func (h *TunnelHandler) create(c *gin.Context) {
 	if !h.bindAndValidateTunnelRequest(c, &req) {
 		return
 	}
-	if _, err := db.GetClientByID(c.Request.Context(), h.database, req.ClientID); err != nil {
-		h.writeClientLookupError(c, err)
-		return
-	}
-
 	tunnel, err := db.CreateTunnel(c.Request.Context(), h.database, db.CreateTunnelParams{
 		Name:       req.Name,
-		ClientID:   req.ClientID,
 		Protocol:   model.TunnelProtocolTCP,
-		LocalHost:  req.LocalHost,
-		LocalPort:  req.LocalPort,
 		RemoteHost: req.RemoteHost,
 		RemotePort: req.RemotePort,
 		AutoStart:  req.AutoStart,
@@ -103,8 +98,20 @@ func (h *TunnelHandler) create(c *gin.Context) {
 		h.writeDBError(c, err, "create tunnel failed")
 		return
 	}
+	secret, secretHash, secretHint, err := buildTunnelSecret()
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, CodeInternalError, "generate tunnel secret failed")
+		return
+	}
+	key, err := db.CreateTunnelKey(c.Request.Context(), h.database, db.CreateTunnelKeyParams{
+		TunnelID: tunnel.ID, SecretHash: secretHash, SecretHint: secretHint,
+	})
+	if err != nil {
+		h.writeDBError(c, err, "create tunnel key failed")
+		return
+	}
 	_ = db.InsertAuditLog(c.Request.Context(), h.database, currentActor(c), "tunnel_create", "tunnel", strconv.FormatInt(tunnel.ID, 10), fmt.Sprintf("created tunnel %s", tunnel.Name), c.ClientIP())
-	OK(c, tunnel)
+	OK(c, tunnelSecretResponse{Tunnel: tunnel, Key: key, Secret: secret})
 }
 
 func (h *TunnelHandler) update(c *gin.Context) {
@@ -116,17 +123,9 @@ func (h *TunnelHandler) update(c *gin.Context) {
 	if !h.bindAndValidateTunnelRequest(c, &req) {
 		return
 	}
-	if _, err := db.GetClientByID(c.Request.Context(), h.database, req.ClientID); err != nil {
-		h.writeClientLookupError(c, err)
-		return
-	}
-
 	tunnel, err := db.UpdateTunnel(c.Request.Context(), h.database, id, db.UpdateTunnelParams{
 		Name:       req.Name,
-		ClientID:   req.ClientID,
 		Protocol:   model.TunnelProtocolTCP,
-		LocalHost:  req.LocalHost,
-		LocalPort:  req.LocalPort,
 		RemoteHost: req.RemoteHost,
 		RemotePort: req.RemotePort,
 		AutoStart:  req.AutoStart,
@@ -138,6 +137,55 @@ func (h *TunnelHandler) update(c *gin.Context) {
 	}
 	_ = db.InsertAuditLog(c.Request.Context(), h.database, currentActor(c), "tunnel_update", "tunnel", strconv.FormatInt(tunnel.ID, 10), fmt.Sprintf("updated tunnel %s", tunnel.Name), c.ClientIP())
 	OK(c, tunnel)
+}
+
+func (h *TunnelHandler) rotateSecret(c *gin.Context) {
+	id, ok := parseIDParam(c)
+	if !ok {
+		return
+	}
+	tunnel, err := db.GetTunnelByID(c.Request.Context(), h.database, id)
+	if err != nil {
+		h.writeDBError(c, err, "load tunnel failed")
+		return
+	}
+	secret, secretHash, secretHint, err := buildTunnelSecret()
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, CodeInternalError, "generate tunnel secret failed")
+		return
+	}
+	key, err := db.RotateTunnelSecret(c.Request.Context(), h.database, id, secretHash, secretHint)
+	if err != nil {
+		h.writeDBError(c, err, "rotate tunnel secret failed")
+		return
+	}
+	_ = db.InsertAuditLog(c.Request.Context(), h.database, currentActor(c), "tunnel_rotate_secret", "tunnel", strconv.FormatInt(tunnel.ID, 10), fmt.Sprintf("rotated secret for tunnel %s", tunnel.Name), c.ClientIP())
+	OK(c, tunnelSecretResponse{Tunnel: tunnel, Key: key, Secret: secret})
+}
+
+func (h *TunnelHandler) enableKey(c *gin.Context) {
+	h.setKeyStatus(c, model.TunnelKeyStatusEnabled, "tunnel_key_enable", "enabled tunnel key")
+}
+
+func (h *TunnelHandler) disableKey(c *gin.Context) {
+	h.setKeyStatus(c, model.TunnelKeyStatusDisabled, "tunnel_key_disable", "disabled tunnel key")
+}
+
+func (h *TunnelHandler) setKeyStatus(c *gin.Context, status model.TunnelKeyStatus, action string, contentPrefix string) {
+	id, ok := parseIDParam(c)
+	if !ok {
+		return
+	}
+	key, err := db.SetTunnelKeyStatus(c.Request.Context(), h.database, id, status)
+	if err != nil {
+		h.writeDBError(c, err, "set tunnel key status failed")
+		return
+	}
+	if status == model.TunnelKeyStatusDisabled && h.runtime != nil {
+		_, _ = h.runtime.StopTunnel(c.Request.Context(), id)
+	}
+	_ = db.InsertAuditLog(c.Request.Context(), h.database, currentActor(c), action, "tunnel", strconv.FormatInt(id, 10), fmt.Sprintf("%s %d", contentPrefix, id), c.ClientIP())
+	OK(c, key)
 }
 
 func (h *TunnelHandler) delete(c *gin.Context) {
@@ -212,7 +260,6 @@ func (h *TunnelHandler) bindAndValidateTunnelRequest(c *gin.Context, req *tunnel
 		return false
 	}
 	req.Name = strings.TrimSpace(req.Name)
-	req.LocalHost = strings.TrimSpace(req.LocalHost)
 	req.RemoteHost = strings.TrimSpace(req.RemoteHost)
 	req.Protocol = strings.TrimSpace(strings.ToLower(req.Protocol))
 	if req.Protocol == "" {
@@ -225,14 +272,8 @@ func (h *TunnelHandler) bindAndValidateTunnelRequest(c *gin.Context, req *tunnel
 	switch {
 	case req.Name == "":
 		Fail(c, http.StatusBadRequest, CodeBadRequest, "name is required")
-	case req.ClientID <= 0:
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "client_id is required")
 	case req.Protocol != string(model.TunnelProtocolTCP):
 		Fail(c, http.StatusBadRequest, CodeBadRequest, "only tcp protocol is supported")
-	case req.LocalHost == "":
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "local_host is required")
-	case !validPort(req.LocalPort):
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "local_port must be between 1 and 65535")
 	case !validPort(req.RemotePort):
 		Fail(c, http.StatusBadRequest, CodeBadRequest, "remote_port must be between 1 and 65535")
 	case req.RemotePort < h.cfg.RemotePortMin || req.RemotePort > h.cfg.RemotePortMax:
@@ -241,17 +282,6 @@ func (h *TunnelHandler) bindAndValidateTunnelRequest(c *gin.Context, req *tunnel
 		return true
 	}
 	return false
-}
-
-func (h *TunnelHandler) writeClientLookupError(c *gin.Context, err error) {
-	if errors.Is(err, db.ErrNotFound) {
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "client_id does not exist")
-		return
-	}
-	if h.log != nil {
-		h.log.Errorf("load client for tunnel failed: %v", err)
-	}
-	Fail(c, http.StatusInternalServerError, CodeInternalError, "load client failed")
 }
 
 func (h *TunnelHandler) writeDBError(c *gin.Context, err error, fallback string) {
@@ -302,4 +332,16 @@ func parseOptionalInt64Query(c *gin.Context, key string) (int64, bool) {
 
 func validPort(port int) bool {
 	return port > 0 && port <= 65535
+}
+
+func buildTunnelSecret() (plain string, hash string, hint string, err error) {
+	plain, err = auth.GenerateClientSecret()
+	if err != nil {
+		return "", "", "", err
+	}
+	hash, err = auth.HashPassword(plain)
+	if err != nil {
+		return "", "", "", err
+	}
+	return plain, hash, auth.SecretHint(plain), nil
 }

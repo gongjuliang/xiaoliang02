@@ -127,6 +127,8 @@ func setupAuthenticatedClientRouter(t *testing.T) (*gin.Engine, *sql.DB, auth.To
 	cfg.Auth.JWTSecret = "test-secret"
 	cfg.Auth.SM2PrivateKeyFile = filepath.Join(dir, "sm2_private.pem")
 	cfg.Auth.SM2PublicKeyFile = filepath.Join(dir, "sm2_public.pem")
+	cfg.MCP.Enabled = true
+	cfg.MCP.AccessToken = "client-mcp-token"
 
 	database, err := db.Open(context.Background(), cfg.Database.Path, nil)
 	if err != nil {

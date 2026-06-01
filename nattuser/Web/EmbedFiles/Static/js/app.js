@@ -1,15 +1,7 @@
-(function ($, layui) {
+(function ($) {
     var apiBase = "/api/client/v1";
     var tokenKey = "natt_client_access_token";
     var refreshKey = "natt_client_refresh_token";
-    var state = { view: "dashboard", pages: {} };
-    var titles = {
-        dashboard: ["本机状态", "运行概览"],
-        servers: ["服务端", "连接配置"],
-        tunnels: ["隧道状态", "服务端下发的本地转发"],
-        config: ["配置", "热加载与重启项"],
-        audit: ["审计", "管理操作记录"]
-    };
 
     function token() {
         return localStorage.getItem(tokenKey) || "";
@@ -25,17 +17,12 @@
     }
 
     function badge(value) {
-        var text = escapeHtml(value || "-");
         var lower = String(value || "").toLowerCase();
         var cls = "";
-        if (["connected", "online", "running", "ok"].indexOf(lower) >= 0) {
-            cls = " ok";
-        } else if (["stopped", "connecting"].indexOf(lower) >= 0) {
-            cls = " warn";
-        } else if (["error", "offline"].indexOf(lower) >= 0) {
-            cls = " err";
-        }
-        return '<span class="badge' + cls + '">' + text + "</span>";
+        if (["online", "enabled", "connected", "running", "ok", "true"].indexOf(lower) >= 0) cls = " ok";
+        if (["offline", "stopped", "connecting", "false"].indexOf(lower) >= 0) cls = " warn";
+        if (["disabled", "error"].indexOf(lower) >= 0) cls = " err";
+        return '<span class="badge' + cls + '">' + escapeHtml(value || "-") + "</span>";
     }
 
     function request(method, path, data) {
@@ -46,332 +33,57 @@
             contentType: data == null ? undefined : "application/json",
             headers: token() ? { Authorization: "Bearer " + token() } : {}
         }).then(function (resp) {
-            if (resp.code !== 0) {
-                return $.Deferred().reject(resp).promise();
-            }
+            if (resp.code !== 0) return $.Deferred().reject(resp).promise();
             return resp.data;
         }, function (xhr) {
             var resp = xhr.responseJSON || { message: xhr.statusText || "请求失败" };
-            if (xhr.status === 401 && path !== "/auth/login") {
-                logout();
-            }
+            if (xhr.status === 401 && path !== "/auth/login") logout();
             return $.Deferred().reject(resp).promise();
         });
     }
 
-    function setView(view) {
-        state.view = view;
-        $("#nav button").removeClass("active");
-        $('#nav button[data-view="' + view + '"]').addClass("active");
-        $("#viewTitle").text(titles[view][0]);
-        $("#viewSubTitle").text(titles[view][1]);
-        render();
-    }
-
-    function showLogin() {
-        $("#loginView").removeClass("hidden");
-        $("#appView").addClass("hidden");
-    }
-
-    function showApp() {
-        $("#loginView").addClass("hidden");
-        $("#appView").removeClass("hidden");
-        setView(state.view || "dashboard");
+    function showError(err) {
+        var message = err && err.message ? err.message : "操作失败";
+        if (window.layui && layui.layer) layui.layer.msg(message, { icon: 2 });
+        else alert(message);
     }
 
     function logout() {
         localStorage.removeItem(tokenKey);
         localStorage.removeItem(refreshKey);
-        showLogin();
+        window.top.location.href = "/login.html";
     }
 
-    function render() {
+    function requireAuth() {
         if (!token()) {
-            showLogin();
-            return;
+            window.top.location.href = "/login.html";
+            return false;
         }
-        if (state.view === "dashboard") {
-            renderDashboard();
-        } else if (state.view === "servers") {
-            renderServers();
-        } else if (state.view === "tunnels") {
-            renderTunnels();
-        } else if (state.view === "config") {
-            renderConfig();
-        } else if (state.view === "audit") {
-            renderAudit();
-        }
-    }
-
-    function statGrid(items) {
-        return '<div class="stat-grid">' + items.map(function (item) {
-            return '<div class="stat-card"><span>' + escapeHtml(item.label) + '</span><strong>' + escapeHtml(item.value) + '</strong></div>';
-        }).join("") + "</div>";
-    }
-
-    function table(columns, items, actions) {
-        if (!items || items.length === 0) {
-            return '<div class="table-wrap"><div class="empty">暂无数据</div></div>';
-        }
-        var head = columns.map(function (col) {
-            return "<th>" + escapeHtml(col.title) + "</th>";
-        }).join("") + (actions ? "<th>操作</th>" : "");
-        var rows = items.map(function (item) {
-            var cells = columns.map(function (col) {
-                var value = typeof col.render === "function" ? col.render(item) : escapeHtml(item[col.key]);
-                return "<td>" + value + "</td>";
-            }).join("");
-            if (actions) {
-                cells += '<td><div class="row-actions">' + actions(item) + "</div></td>";
-            }
-            return "<tr>" + cells + "</tr>";
-        }).join("");
-        return '<div class="table-wrap"><table class="data-table"><thead><tr>' + head + "</tr></thead><tbody>" + rows + "</tbody></table></div>";
-    }
-
-    function pageState(view) {
-        if (!state.pages[view]) {
-            state.pages[view] = { page: 1, page_size: 20 };
-        }
-        return state.pages[view];
-    }
-
-    function pageQuery(view) {
-        var p = pageState(view);
-        return "page=" + encodeURIComponent(p.page) + "&page_size=" + encodeURIComponent(p.page_size);
-    }
-
-    function renderPager(view, page) {
-        var p = pageState(view);
-        p.page = Number(page.page || p.page || 1);
-        p.page_size = Number(page.page_size || p.page_size || 20);
-        var total = Number(page.total || 0);
-        var totalPages = Math.max(1, Math.ceil(total / p.page_size));
-        if (p.page > totalPages) {
-            p.page = totalPages;
-        }
-        return '<div class="pager" data-view="' + escapeHtml(view) + '">' +
-            '<span>共 ' + escapeHtml(total) + ' 条</span>' +
-            '<button class="layui-btn secondary" data-page-action="prev" type="button"' + (p.page <= 1 ? " disabled" : "") + '>上一页</button>' +
-            '<strong>第 ' + escapeHtml(p.page) + ' / ' + escapeHtml(totalPages) + ' 页</strong>' +
-            '<button class="layui-btn secondary" data-page-action="next" data-total-pages="' + totalPages + '" type="button"' + (p.page >= totalPages ? " disabled" : "") + '>下一页</button>' +
-            '<select class="inline-input pager-size" data-page-action="size">' +
-            [10, 20, 50, 100].map(function (size) {
-                return '<option value="' + size + '"' + (size === p.page_size ? " selected" : "") + '>' + size + ' / 页</option>';
-            }).join("") +
-            '</select>' +
-            '</div>';
-    }
-
-    function actionButton(action, id, text, style) {
-        return '<button class="layui-btn ' + (style || "secondary") + '" data-action="' + action + '" data-id="' + id + '" type="button">' + text + "</button>";
-    }
-
-    function renderDashboard() {
-        $("#content").html('<div class="empty">加载中</div>');
-        request("GET", "/status").then(function (data) {
-            var summary = data.server_connections || {};
-            $("#content").html(
-                statGrid([
-                    { label: "服务端配置", value: summary.total_server_connections || 0 },
-                    { label: "已连接", value: summary.connected_server_connections || 0 },
-                    { label: "已停止", value: summary.stopped_server_connections || 0 },
-                    { label: "异常", value: summary.error_server_connections || 0 }
-                ]) +
-                '<div class="panel"><h3>运行时</h3><pre>' + escapeHtml(JSON.stringify(data.runtime || {}, null, 2)) + "</pre></div>"
-            );
-        }).fail(showError);
-    }
-
-    function renderServers() {
-        $("#content").html('<div class="empty">加载中</div>');
-        request("GET", "/servers?" + pageQuery("servers")).then(function (page) {
-            $("#content").html(
-                '<div class="toolbar"><h3>服务端连接</h3><button id="addServerBtn" class="layui-btn primary" type="button">新增服务端</button></div>' +
-                table([
-                    { title: "ID", key: "id" },
-                    { title: "名称", key: "name" },
-                    { title: "控制地址", render: function (x) { return escapeHtml(x.server_host + ":" + x.server_port); } },
-                    { title: "数据端口", key: "data_port" },
-                    { title: "TLS", render: function (x) { return x.use_tls ? "开" : "关"; } },
-                    { title: "状态", render: function (x) { return badge(x.status); } },
-                    { title: "自启动", render: function (x) { return x.auto_start ? "是" : "否"; } },
-                    { title: "错误", key: "last_error" }
-                ], page.items || [], function (x) {
-                    return actionButton("server-edit", x.id, "编辑") +
-                        actionButton("server-start", x.id, "连接") +
-                        actionButton("server-stop", x.id, "断开") +
-                        actionButton("server-delete", x.id, "删除", "danger");
-                }) +
-                renderPager("servers", page)
-            );
-        }).fail(showError);
-    }
-
-    function renderTunnels() {
-        $("#content").html('<div class="empty">加载中</div>');
-        request("GET", "/tunnels?" + pageQuery("tunnels")).then(function (page) {
-            $("#content").html(table([
-                { title: "ID", key: "id" },
-                { title: "名称", key: "name" },
-                { title: "服务端", key: "server_id" },
-                { title: "本地", render: function (x) { return escapeHtml(x.local_host + ":" + x.local_port); } },
-                { title: "公网", render: function (x) { return escapeHtml(x.remote_host + ":" + x.remote_port); } },
-                { title: "状态", render: function (x) { return badge(x.status); } },
-                { title: "错误", key: "last_error" }
-            ], page.items || []) + renderPager("tunnels", page));
-        }).fail(showError);
-    }
-
-    function renderConfig() {
-        $("#content").html('<div class="empty">加载中</div>');
-        request("GET", "/config").then(function (data) {
-            var keys = data.editable_keys || [];
-            $("#content").html(
-                '<div class="panel"><div class="toolbar"><h3>配置修改</h3><button id="saveConfigBtn" class="layui-btn primary" type="button">保存</button></div>' +
-                '<label class="field"><span>配置项</span><select id="configKey">' + keys.map(function (x) {
-                    return '<option value="' + escapeHtml(x.key) + '">' + escapeHtml(x.key) + (x.hot_reload ? " / hot" : " / restart") + "</option>";
-                }).join("") + '</select></label><label class="field"><span>值</span><input id="configValue"></label></div>' +
-                '<div class="panel"><h3>当前配置</h3><pre>' + escapeHtml(JSON.stringify(data.current || {}, null, 2)) + "</pre></div>"
-            );
-        }).fail(showError);
-    }
-
-    function renderAudit() {
-        $("#content").html('<div class="empty">加载中</div>');
-        request("GET", "/audit-logs?" + pageQuery("audit")).then(function (page) {
-            $("#content").html(table([
-                { title: "时间", key: "created_at" },
-                { title: "操作者", key: "actor" },
-                { title: "动作", key: "action" },
-                { title: "目标", render: function (x) { return escapeHtml((x.target_type || "") + " " + (x.target_id || "")); } },
-                { title: "内容", key: "content" },
-                { title: "IP", key: "ip" }
-            ], page.items || []) + renderPager("audit", page));
-        }).fail(showError);
-    }
-
-    function openForm(title, fields, onSubmit) {
-        var html = '<div class="modal-panel"><div class="modal-head"><strong>' + escapeHtml(title) + '</strong><button class="layui-btn ghost" data-modal-close type="button">关闭</button></div><form id="modalForm"><div class="modal-body">';
-        fields.forEach(function (f) {
-            html += '<label class="field"><span>' + escapeHtml(f.label) + '</span>';
-            html += '<input name="' + escapeHtml(f.name) + '" type="' + escapeHtml(f.type || "text") + '" value="' + escapeHtml(f.value || "") + '">';
-            html += "</label>";
-        });
-        html += '</div><div class="modal-foot"><button class="layui-btn secondary" data-modal-close type="button">取消</button><button class="layui-btn primary" type="submit">保存</button></div></form></div>';
-        $("#modalRoot").html(html).removeClass("hidden");
-        $("#modalForm").on("submit", function (e) {
-            e.preventDefault();
-            var data = {};
-            fields.forEach(function (f) {
-                data[f.name] = $('[name="' + f.name + '"]', "#modalForm").val();
-            });
-            onSubmit(data);
-        });
-    }
-
-    function closeModal() {
-        $("#modalRoot").addClass("hidden").empty();
-    }
-
-    function showError(err) {
-        layui.layer.msg(err && err.message ? err.message : "请求失败");
-    }
-
-    function serverForm(server) {
-        openForm(server ? "编辑服务端" : "新增服务端", [
-            { name: "name", label: "名称", value: server && server.name },
-            { name: "server_host", label: "服务端地址", value: server && server.server_host || "127.0.0.1" },
-            { name: "server_port", label: "控制端口", type: "number", value: server && server.server_port || 7000 },
-            { name: "data_port", label: "数据端口", type: "number", value: server && server.data_port || 7001 },
-            { name: "use_tls", label: "TLS true/false", value: server ? String(!!server.use_tls) : "false" },
-            { name: "client_secret", label: "客户端秘钥", value: "" },
-            { name: "auto_start", label: "自动连接 true/false", value: server ? String(!!server.auto_start) : "true" },
-            { name: "remark", label: "备注", value: server && server.remark }
-        ], function (data) {
-            data.server_port = Number(data.server_port);
-            data.data_port = Number(data.data_port);
-            data.use_tls = data.use_tls === "true";
-            data.auto_start = data.auto_start === "true";
-            request(server ? "PUT" : "POST", server ? "/servers/" + server.id : "/servers", data).then(function () {
-                closeModal();
-                renderServers();
-            }).fail(showError);
-        });
+        return true;
     }
 
     $("#loginForm").on("submit", function (e) {
         e.preventDefault();
-        $("#loginError").text("");
-        request("POST", "/auth/login", {
-            username: $('[name="username"]', this).val(),
-            password: $('[name="password"]', this).val()
-        }).then(function (tokens) {
-            localStorage.setItem(tokenKey, tokens.access_token);
-            localStorage.setItem(refreshKey, tokens.refresh_token);
-            showApp();
+        var payload = {
+            username: $.trim($('[name="username"]').val()),
+            password: $('[name="password"]').val()
+        };
+        request("POST", "/auth/login", payload).then(function (data) {
+            localStorage.setItem(tokenKey, data.access_token || "");
+            localStorage.setItem(refreshKey, data.refresh_token || "");
+            window.location.href = "/index.html";
         }).fail(function (err) {
-            $("#loginError").text(err && err.message ? err.message : "登录失败");
+            $("#loginError").text(err.message || "登录失败");
         });
     });
 
-    $("#nav").on("click", "button", function () {
-        setView($(this).data("view"));
-    });
-    $("#refreshBtn").on("click", render);
-    $("#logoutBtn").on("click", logout);
-    $("#content").on("click", "#addServerBtn", function () { serverForm(null); });
-    $("#content").on("click", "#saveConfigBtn", function () {
-        var key = $("#configKey").val();
-        var value = $("#configValue").val();
-        request("PUT", "/config", { settings: (function () { var obj = {}; obj[key] = value; return obj; })() }).then(function () {
-            layui.layer.msg("已保存");
-            renderConfig();
-        }).fail(showError);
-    });
-    $("#content").on("click", "[data-page-action]", function () {
-        var action = $(this).data("page-action");
-        if (action === "size") {
-            return;
-        }
-        var pager = $(this).closest(".pager");
-        var view = pager.data("view");
-        var p = pageState(view);
-        var totalPages = Number($(this).data("total-pages") || 1);
-        if (action === "prev" && p.page > 1) {
-            p.page -= 1;
-        } else if (action === "next" && p.page < totalPages) {
-            p.page += 1;
-        }
-        render();
-    });
-    $("#content").on("change", 'select[data-page-action="size"]', function () {
-        var view = $(this).closest(".pager").data("view");
-        var p = pageState(view);
-        p.page = 1;
-        p.page_size = Number($(this).val());
-        render();
-    });
-    $("#content").on("click", "[data-action]", function () {
-        var action = $(this).data("action");
-        var id = $(this).data("id");
-        if (action === "server-start" || action === "server-stop") {
-            request("POST", "/servers/" + id + "/" + (action === "server-start" ? "start" : "stop")).then(renderServers).fail(showError);
-        } else if (action === "server-delete") {
-            layui.layer.confirm("删除该服务端连接？", function () {
-                request("DELETE", "/servers/" + id).then(renderServers).fail(showError);
-            });
-        } else if (action === "server-edit") {
-            request("GET", "/servers?page=1&page_size=100").then(function (page) {
-                serverForm((page.items || []).filter(function (x) { return x.id === id; })[0]);
-            }).fail(showError);
-        }
-    });
-    $("#modalRoot").on("click", "[data-modal-close]", closeModal);
-
-    if (token()) {
-        showApp();
-    } else {
-        showLogin();
-    }
-})(jQuery, layui);
+    window.NATT = {
+        request: request,
+        escapeHtml: escapeHtml,
+        badge: badge,
+        showError: showError,
+        logout: logout,
+        requireAuth: requireAuth,
+        token: token
+    };
+})(jQuery);

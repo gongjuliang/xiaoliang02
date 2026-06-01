@@ -2,6 +2,7 @@ package api
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"runtime"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"nattuser/internal/auth"
 	"nattuser/internal/config"
 	"nattuser/internal/db"
 	"nattuser/internal/logger"
@@ -37,6 +39,16 @@ type localTunnelStatus struct {
 	ControlPhase string `json:"control_phase"`
 }
 
+type localTunnelRequest struct {
+	Name               string `json:"name" binding:"required"`
+	ServerConnectionID int64  `json:"server_connection_id" binding:"required"`
+	ServerTunnelID     int64  `json:"server_tunnel_id" binding:"required"`
+	LocalHost          string `json:"local_host" binding:"required"`
+	LocalPort          int    `json:"local_port" binding:"required"`
+	Enabled            *bool  `json:"enabled"`
+	Remark             string `json:"remark"`
+}
+
 type updateConfigRequest struct {
 	Settings map[string]string `json:"settings" binding:"required"`
 }
@@ -58,11 +70,13 @@ func NewOpsHandler(database *sql.DB, log *logger.Logger, cfg *config.Config) *Op
 }
 
 func (h *OpsHandler) RegisterRoutes(group *gin.RouterGroup) {
-	group.GET("/tunnels", h.localTunnels)
 	group.GET("/status", h.status)
 	group.GET("/audit-logs", h.auditLogs)
 	group.GET("/config", h.getConfig)
 	group.PUT("/config", h.updateConfig)
+	group.GET("/mcp-config", h.getMCPConfig)
+	group.PUT("/mcp-config", h.updateMCPConfig)
+	group.POST("/mcp-config/rotate-token", h.rotateMCPToken)
 }
 
 func (h *OpsHandler) localTunnels(c *gin.Context) {
@@ -72,7 +86,90 @@ func (h *OpsHandler) localTunnels(c *gin.Context) {
 		return
 	}
 	page.Normalize()
-	OK(c, NewPageResponse([]localTunnelStatus{}, 0, page))
+	tunnels, total, err := db.ListLocalTunnels(c.Request.Context(), h.database, page.Limit(), page.Offset())
+	if err != nil {
+		h.writeError(c, err, "list local tunnels failed")
+		return
+	}
+	OK(c, NewPageResponse(tunnels, total, page))
+}
+
+func (h *OpsHandler) createLocalTunnel(c *gin.Context) {
+	var req localTunnelRequest
+	if !h.bindAndValidateLocalTunnel(c, &req) {
+		return
+	}
+	if _, err := db.GetServerConnectionByID(c.Request.Context(), h.database, req.ServerConnectionID); err != nil {
+		h.writeLocalTunnelDBError(c, err, "load server connection failed")
+		return
+	}
+	enabled := true
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	}
+	tunnel, err := db.CreateLocalTunnel(c.Request.Context(), h.database, db.CreateLocalTunnelParams{
+		Name:               req.Name,
+		ServerConnectionID: req.ServerConnectionID,
+		ServerTunnelID:     req.ServerTunnelID,
+		LocalHost:          req.LocalHost,
+		LocalPort:          req.LocalPort,
+		Enabled:            enabled,
+		Remark:             req.Remark,
+	})
+	if err != nil {
+		h.writeLocalTunnelDBError(c, err, "create local tunnel failed")
+		return
+	}
+	_ = db.InsertAuditLog(c.Request.Context(), h.database, currentActor(c), "local_tunnel_create", "local_tunnel", strconv.FormatInt(tunnel.ID, 10), fmt.Sprintf("created local tunnel %s", tunnel.Name), c.ClientIP())
+	OK(c, tunnel)
+}
+
+func (h *OpsHandler) updateLocalTunnel(c *gin.Context) {
+	id, ok := parseIDParam(c)
+	if !ok {
+		return
+	}
+	var req localTunnelRequest
+	if !h.bindAndValidateLocalTunnel(c, &req) {
+		return
+	}
+	if _, err := db.GetServerConnectionByID(c.Request.Context(), h.database, req.ServerConnectionID); err != nil {
+		h.writeLocalTunnelDBError(c, err, "load server connection failed")
+		return
+	}
+	enabled := true
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	}
+	tunnel, err := db.UpdateLocalTunnel(c.Request.Context(), h.database, id, db.UpdateLocalTunnelParams{
+		Name:               req.Name,
+		ServerConnectionID: req.ServerConnectionID,
+		ServerTunnelID:     req.ServerTunnelID,
+		LocalHost:          req.LocalHost,
+		LocalPort:          req.LocalPort,
+		Enabled:            enabled,
+		Remark:             req.Remark,
+	})
+	if err != nil {
+		h.writeLocalTunnelDBError(c, err, "update local tunnel failed")
+		return
+	}
+	_ = db.InsertAuditLog(c.Request.Context(), h.database, currentActor(c), "local_tunnel_update", "local_tunnel", strconv.FormatInt(tunnel.ID, 10), fmt.Sprintf("updated local tunnel %s", tunnel.Name), c.ClientIP())
+	OK(c, tunnel)
+}
+
+func (h *OpsHandler) deleteLocalTunnel(c *gin.Context) {
+	id, ok := parseIDParam(c)
+	if !ok {
+		return
+	}
+	tunnel, err := db.DeleteLocalTunnel(c.Request.Context(), h.database, id)
+	if err != nil {
+		h.writeLocalTunnelDBError(c, err, "delete local tunnel failed")
+		return
+	}
+	_ = db.InsertAuditLog(c.Request.Context(), h.database, currentActor(c), "local_tunnel_delete", "local_tunnel", strconv.FormatInt(tunnel.ID, 10), fmt.Sprintf("deleted local tunnel %s", tunnel.Name), c.ClientIP())
+	OK(c, tunnel)
 }
 
 func (h *OpsHandler) status(c *gin.Context) {
@@ -148,11 +245,6 @@ func (h *OpsHandler) getConfig(c *gin.Context) {
 				"control_port": h.cfg.ServerDefaults.ControlPort,
 				"data_port":    h.cfg.ServerDefaults.DataPort,
 				"use_tls":      h.cfg.ServerDefaults.UseTLS,
-			},
-			"mcp": gin.H{
-				"enabled": h.cfg.MCP.Enabled,
-				"host":    h.cfg.MCP.Host,
-				"port":    h.cfg.MCP.Port,
 			},
 		},
 		"persisted_settings": settings,
@@ -231,8 +323,7 @@ func (h *OpsHandler) applyConfigSetting(key string, value string) (configUpdateR
 		h.cfg.ServerDefaults.UseTLS = parsed
 		return configUpdateResult{Key: key, Value: strconv.FormatBool(parsed), HotReloaded: true, RestartRequired: false}, nil
 	case "http.host", "http.port",
-		"auth.access_token_ttl_minutes", "auth.refresh_token_ttl_minutes", "auth.login_rate_limit_per_minute",
-		"mcp.enabled", "mcp.host", "mcp.port":
+		"auth.access_token_ttl_minutes", "auth.refresh_token_ttl_minutes", "auth.login_rate_limit_per_minute":
 		if err := validateRestartSetting(key, value); err != nil {
 			return configUpdateResult{}, err
 		}
@@ -249,6 +340,43 @@ func (h *OpsHandler) writeError(c *gin.Context, err error, fallback string) {
 	Fail(c, http.StatusInternalServerError, CodeInternalError, fallback)
 }
 
+func (h *OpsHandler) bindAndValidateLocalTunnel(c *gin.Context, req *localTunnelRequest) bool {
+	if err := c.ShouldBindJSON(req); err != nil {
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "invalid local tunnel parameters")
+		return false
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	req.LocalHost = strings.TrimSpace(req.LocalHost)
+	req.Remark = strings.TrimSpace(req.Remark)
+	switch {
+	case req.Name == "":
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "name is required")
+	case req.ServerConnectionID <= 0:
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "server_connection_id is required")
+	case req.ServerTunnelID <= 0:
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "server_tunnel_id is required")
+	case req.LocalHost == "":
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "local_host is required")
+	case !validPort(req.LocalPort):
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "local_port must be between 1 and 65535")
+	default:
+		return true
+	}
+	return false
+}
+
+func (h *OpsHandler) writeLocalTunnelDBError(c *gin.Context, err error, fallback string) {
+	if errors.Is(err, db.ErrNotFound) {
+		Fail(c, http.StatusNotFound, CodeNotFound, "resource not found")
+		return
+	}
+	if errors.Is(err, db.ErrConflict) {
+		Fail(c, http.StatusConflict, CodeConflict, "local tunnel conflict")
+		return
+	}
+	h.writeError(c, err, fallback)
+}
+
 func editableConfigKeys() []gin.H {
 	return []gin.H{
 		{"key": "log.level", "hot_reload": true},
@@ -261,9 +389,6 @@ func editableConfigKeys() []gin.H {
 		{"key": "auth.access_token_ttl_minutes", "hot_reload": false},
 		{"key": "auth.refresh_token_ttl_minutes", "hot_reload": false},
 		{"key": "auth.login_rate_limit_per_minute", "hot_reload": false},
-		{"key": "mcp.enabled", "hot_reload": false},
-		{"key": "mcp.host", "hot_reload": false},
-		{"key": "mcp.port", "hot_reload": false},
 	}
 }
 
@@ -277,7 +402,7 @@ func parsePortValue(key string, value string) (int, error) {
 
 func validateRestartSetting(key string, value string) error {
 	switch key {
-	case "http.port", "mcp.port":
+	case "http.port":
 		_, err := parsePortValue(key, value)
 		return err
 	case "auth.access_token_ttl_minutes", "auth.refresh_token_ttl_minutes", "auth.login_rate_limit_per_minute":
@@ -285,10 +410,73 @@ func validateRestartSetting(key string, value string) error {
 		if err != nil || parsed <= 0 {
 			return fmt.Errorf("%s must be greater than 0", key)
 		}
-	case "mcp.enabled":
-		if _, err := strconv.ParseBool(value); err != nil {
-			return fmt.Errorf("mcp.enabled must be true or false")
-		}
 	}
 	return nil
+}
+
+type mcpConfigRequest struct {
+	Enabled     bool   `json:"enabled"`
+	AccessToken string `json:"access_token"`
+}
+
+func (h *OpsHandler) getMCPConfig(c *gin.Context) {
+	enabledValue, err := db.GetSetting(c.Request.Context(), h.database, "mcp.enabled")
+	if err != nil && !errors.Is(err, db.ErrNotFound) {
+		h.writeError(c, err, "load mcp config failed")
+		return
+	}
+	token, err := db.GetSetting(c.Request.Context(), h.database, "mcp.access_token")
+	if err != nil && !errors.Is(err, db.ErrNotFound) {
+		h.writeError(c, err, "load mcp token failed")
+		return
+	}
+	enabled, _ := strconv.ParseBool(enabledValue)
+	OK(c, gin.H{"enabled": enabled, "access_token_hint": auth.SecretHint(token), "has_access_token": strings.TrimSpace(token) != ""})
+}
+
+func (h *OpsHandler) updateMCPConfig(c *gin.Context) {
+	var req mcpConfigRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "invalid mcp config")
+		return
+	}
+	token := strings.TrimSpace(req.AccessToken)
+	if req.Enabled && token == "" {
+		existing, err := db.GetSetting(c.Request.Context(), h.database, "mcp.access_token")
+		if err != nil && !errors.Is(err, db.ErrNotFound) {
+			h.writeError(c, err, "load mcp token failed")
+			return
+		}
+		token = strings.TrimSpace(existing)
+	}
+	if req.Enabled && token == "" {
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "access_token is required when mcp is enabled")
+		return
+	}
+	if err := db.UpsertSetting(c.Request.Context(), h.database, "mcp.enabled", strconv.FormatBool(req.Enabled)); err != nil {
+		h.writeError(c, err, "save mcp enabled failed")
+		return
+	}
+	if strings.TrimSpace(req.AccessToken) != "" {
+		if err := db.UpsertSetting(c.Request.Context(), h.database, "mcp.access_token", token); err != nil {
+			h.writeError(c, err, "save mcp token failed")
+			return
+		}
+	}
+	_ = db.InsertAuditLog(c.Request.Context(), h.database, currentActor(c), "mcp_config_update", "mcp", "client", "updated mcp config", c.ClientIP())
+	OK(c, gin.H{"enabled": req.Enabled, "access_token_hint": auth.SecretHint(token), "has_access_token": token != ""})
+}
+
+func (h *OpsHandler) rotateMCPToken(c *gin.Context) {
+	token, err := auth.GenerateClientSecret()
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, CodeInternalError, "generate mcp token failed")
+		return
+	}
+	if err := db.UpsertSetting(c.Request.Context(), h.database, "mcp.access_token", token); err != nil {
+		h.writeError(c, err, "save mcp token failed")
+		return
+	}
+	_ = db.InsertAuditLog(c.Request.Context(), h.database, currentActor(c), "mcp_token_rotate", "mcp", "client", "rotated mcp token", c.ClientIP())
+	OK(c, gin.H{"access_token": token, "access_token_hint": auth.SecretHint(token)})
 }

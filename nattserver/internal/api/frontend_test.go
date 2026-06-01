@@ -19,6 +19,7 @@ func TestRouterServesEmbeddedFrontend(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
 	cfg.Database.Path = filepath.Join(dir, "test.db")
+	cfg.Log.Dir = filepath.Join(dir, "logs")
 	cfg.Auth.SM2PrivateKeyFile = filepath.Join(dir, "sm2_private.pem")
 	cfg.Auth.SM2PublicKeyFile = filepath.Join(dir, "sm2_public.pem")
 	database, err := db.Open(context.Background(), cfg.Database.Path, nil)
@@ -36,6 +37,16 @@ func TestRouterServesEmbeddedFrontend(t *testing.T) {
 	}
 	if !strings.Contains(index.Body.String(), "NATT Server") {
 		t.Fatalf("index does not contain server title: %s", index.Body.String())
+	}
+	for _, path := range []string{"/login.html", "/dashboard.html", "/clients.html", "/tunnels.html", "/config.html", "/audit.html"} {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status=%d body=%s", path, rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), "data-page=") {
+			t.Fatalf("%s does not look like a module page: %s", path, rec.Body.String())
+		}
 	}
 
 	css := httptest.NewRecorder()
