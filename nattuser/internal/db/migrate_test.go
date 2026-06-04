@@ -20,7 +20,8 @@ func TestOpenRunsMigrationsAndSeedsAdmin(t *testing.T) {
 	for _, table := range []string{
 		"schema_migrations",
 		"users",
-		"server_connections",
+		"tunnel_connections",
+		"local_tunnels",
 		"audit_logs",
 		"settings",
 	} {

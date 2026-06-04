@@ -12,6 +12,10 @@
         .mcp-form input { width: 100%; }
         .hint { color: #687386; }
         .secret-box { font-family: monospace; background: #f5f7fb; border: 1px solid #dbe3ef; border-radius: 6px; padding: 8px; margin-top: 8px; word-break: break-all; }
+        .mcp-section { margin-top: 16px; }
+        .mcp-section h4 { margin: 0 0 10px; font-size: 14px; color: #475569; }
+        .mcp-example { display: grid; gap: 8px; }
+        .mcp-example code { display: block; padding: 8px 10px; border: 1px solid #dbe3ef; border-radius: 6px; background: #f8fafc; white-space: pre-wrap; word-break: break-word; }
     </style>
 </head>
 <body>
@@ -21,13 +25,30 @@
 <script src="/static/js/app.js"></script>
 <script>
 if (NATT.requireAuth()) {
+    function usageHTML() {
+        return '<div class="mcp-section"><h4>如何使用 MCP</h4>' +
+            '<p class="hint">MCP 使用当前 HTTP 端口，健康检查为 <code>/mcp/health</code>，工具调用为 <code>POST /mcp/tools/call</code>。请求头支持 <code>Authorization: Bearer MCP_KEY</code> 或 <code>X-MCP-Token: MCP_KEY</code>。</p>' +
+            '<div class="mcp-example">' +
+            '<code>提示词：查询客户端配置了哪些隧道连接\n触发工具：client.list_tunnel_connections\n参数示例：{"page":1,"page_size":20}</code>' +
+            '<code>提示词：连接 ID 为 2 的服务端\n触发工具：client.connect_server\n参数示例：{"id":2}</code>' +
+            '<code>提示词：查看当前机器网络信息\n触发工具：client.get_network_status\n参数示例：{}</code>' +
+            '</div></div>';
+    }
     function loadMCP() {
         NATT.request("GET", "/mcp-config").then(function (d) {
-            $("#content").html('<div class="panel"><h3>MCP 配置</h3><div class="mcp-form"><label><input id="enabled" type="checkbox" ' + (d.enabled ? 'checked' : '') + '> 启用 MCP</label><label>访问 Key<input id="token" class="layui-input" placeholder="留空则保留原 key"></label><p class="hint">当前 Key：' + NATT.escapeHtml(d.access_token_hint || "未设置") + '</p><button id="saveMCP" class="layui-btn primary" type="button">保存</button><button id="rotateMCP" class="layui-btn" type="button">重置 Key</button></div></div>');
+            $("#content").html('<div class="panel"><h3>MCP 配置</h3><div class="mcp-form">' +
+                '<label class="check-row"><input id="enabled" type="checkbox" ' + (d.enabled ? 'checked' : '') + '><span>启用 MCP</span></label>' +
+                '<label>访问 Key<input id="token" class="layui-input" placeholder="留空则保留原 key"></label>' +
+                '<p class="hint">当前 Key：' + NATT.escapeHtml(d.access_token_hint || "未设置") + '</p>' +
+                '<div class="row-actions"><button id="saveMCP" class="layui-btn primary" type="button">保存</button><button id="rotateMCP" class="layui-btn" type="button">重置 Key</button></div>' +
+                '</div>' + usageHTML() + '</div>');
         }).fail(NATT.showError);
     }
     $("#content").on("click", "#saveMCP", function () {
-        NATT.request("PUT", "/mcp-config", { enabled: $("#enabled").prop("checked"), access_token: $("#token").val() }).then(loadMCP).fail(NATT.showError);
+        NATT.request("PUT", "/mcp-config", { enabled: $("#enabled").prop("checked"), access_token: $("#token").val() }).then(function () {
+            layui.layer.msg("保存成功");
+            loadMCP();
+        }).fail(NATT.showError);
     });
     $("#content").on("click", "#rotateMCP", function () {
         NATT.request("POST", "/mcp-config/rotate-token").then(function (d) {

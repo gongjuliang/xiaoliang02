@@ -51,6 +51,7 @@
     function logout() {
         localStorage.removeItem(tokenKey);
         localStorage.removeItem(refreshKey);
+        sessionStorage.removeItem("natt_server_active_view");
         window.top.location.href = "/login.html";
     }
 
@@ -62,11 +63,31 @@
         return true;
     }
 
+    var captchaID = "";
+
+    function loadCaptcha() {
+        if (!$("#captchaQuestion").length) return;
+        request("GET", "/auth/captcha").then(function (data) {
+            captchaID = data.captcha_id || "";
+            $("#captchaQuestion").text(data.question || "点击刷新");
+            $('[name="captcha_code"]').val("");
+        }).fail(function (err) {
+            $("#captchaQuestion").text("验证码加载失败");
+            showError(err);
+        });
+    }
+
+    $("#captchaRefresh").on("click", function () {
+        loadCaptcha();
+    });
+
     $("#loginForm").on("submit", function (e) {
         e.preventDefault();
         var payload = {
             username: $.trim($('[name="username"]').val()),
-            password: $('[name="password"]').val()
+            password: $('[name="password"]').val(),
+            captcha_id: captchaID,
+            captcha_code: $('[name="captcha_code"]').val()
         };
         request("POST", "/auth/login", payload).then(function (data) {
             localStorage.setItem(tokenKey, data.access_token || "");
@@ -74,8 +95,11 @@
             window.location.href = "/index.html";
         }).fail(function (err) {
             $("#loginError").text(err.message || "登录失败");
+            loadCaptcha();
         });
     });
+
+    loadCaptcha();
 
     window.NATT = {
         request: request,
@@ -84,6 +108,7 @@
         showError: showError,
         logout: logout,
         requireAuth: requireAuth,
-        token: token
+        token: token,
+        loadCaptcha: loadCaptcha
     };
 })(jQuery);

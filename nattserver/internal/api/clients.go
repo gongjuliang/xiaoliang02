@@ -61,13 +61,13 @@ func (h *ClientHandler) RegisterRoutes(group *gin.RouterGroup) {
 func (h *ClientHandler) list(c *gin.Context) {
 	var page PageRequest
 	if err := c.ShouldBindQuery(&page); err != nil {
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "invalid pagination parameters")
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "分页参数不正确")
 		return
 	}
 	page.Normalize()
 	clients, total, err := db.ListClients(c.Request.Context(), h.database, page.Limit(), page.Offset())
 	if err != nil {
-		Fail(c, http.StatusInternalServerError, CodeInternalError, "list clients failed")
+		Fail(c, http.StatusInternalServerError, CodeInternalError, "查询客户端失败")
 		return
 	}
 	OK(c, NewPageResponse(clients, total, page))
@@ -75,19 +75,18 @@ func (h *ClientHandler) list(c *gin.Context) {
 
 func (h *ClientHandler) create(c *gin.Context) {
 	var req createClientRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "name is required")
+	if !bindJSONOrFail(c, &req, "客户端参数不正确") {
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" {
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "name is required")
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "name 为必填项")
 		return
 	}
 
 	secret, secretHash, secretHint, err := buildClientSecret()
 	if err != nil {
-		Fail(c, http.StatusInternalServerError, CodeInternalError, "generate client secret failed")
+		Fail(c, http.StatusInternalServerError, CodeInternalError, "生成客户端秘钥失败")
 		return
 	}
 	client, err := db.CreateClient(c.Request.Context(), h.database, db.CreateClientParams{
@@ -110,13 +109,12 @@ func (h *ClientHandler) update(c *gin.Context) {
 		return
 	}
 	var req updateClientRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "name is required")
+	if !bindJSONOrFail(c, &req, "客户端参数不正确") {
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" {
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "name is required")
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "name 为必填项")
 		return
 	}
 	client, err := db.UpdateClient(c.Request.Context(), h.database, id, db.UpdateClientParams{
@@ -146,7 +144,7 @@ func (h *ClientHandler) rotateSecret(c *gin.Context) {
 	}
 	secret, secretHash, secretHint, err := buildClientSecret()
 	if err != nil {
-		Fail(c, http.StatusInternalServerError, CodeInternalError, "generate client secret failed")
+		Fail(c, http.StatusInternalServerError, CodeInternalError, "生成客户端秘钥失败")
 		return
 	}
 	client, err := db.RotateClientSecret(c.Request.Context(), h.database, id, secretHash, secretHint)
@@ -177,11 +175,11 @@ func (h *ClientHandler) setStatus(c *gin.Context, status model.ClientStatus, act
 
 func (h *ClientHandler) writeDBError(c *gin.Context, err error, fallback string) {
 	if errors.Is(err, db.ErrNotFound) {
-		Fail(c, http.StatusNotFound, CodeNotFound, "client not found")
+		Fail(c, http.StatusNotFound, CodeNotFound, "客户端不存在")
 		return
 	}
 	if errors.Is(err, db.ErrConflict) {
-		Fail(c, http.StatusConflict, CodeConflict, "client conflict")
+		Fail(c, http.StatusConflict, CodeConflict, "客户端名称已存在")
 		return
 	}
 	if h.log != nil {
@@ -205,7 +203,7 @@ func buildClientSecret() (plain string, hash string, hint string, err error) {
 func parseIDParam(c *gin.Context) (int64, bool) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "invalid id")
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "id 不正确")
 		return 0, false
 	}
 	return id, true

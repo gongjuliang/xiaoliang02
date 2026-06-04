@@ -212,6 +212,47 @@ BEGIN
 END;
 `,
 	},
+	{
+		Version: 3,
+		Name:    "persist_plain_tunnel_secret",
+		SQL: `
+ALTER TABLE tunnel_keys ADD COLUMN secret_plain TEXT;
+`,
+	},
+	{
+		Version: 4,
+		Name:    "legacy_client_compatibility",
+		SQL: `
+CREATE TABLE IF NOT EXISTS clients (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	name TEXT NOT NULL,
+	secret_hash TEXT UNIQUE NOT NULL,
+	secret_hint TEXT NOT NULL,
+	status TEXT NOT NULL DEFAULT 'enabled',
+	online_status TEXT NOT NULL DEFAULT 'offline',
+	last_ip TEXT,
+	last_seen_at DATETIME,
+	last_error TEXT,
+	remark TEXT,
+	created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+	updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
+);
+
+ALTER TABLE tunnels ADD COLUMN client_id INTEGER NOT NULL DEFAULT 0;
+
+CREATE INDEX IF NOT EXISTS idx_clients_status ON clients(status);
+CREATE INDEX IF NOT EXISTS idx_clients_online_status ON clients(online_status);
+CREATE INDEX IF NOT EXISTS idx_tunnels_client_id ON tunnels(client_id);
+
+CREATE TRIGGER IF NOT EXISTS trg_clients_updated_at
+AFTER UPDATE ON clients
+FOR EACH ROW
+WHEN NEW.updated_at = OLD.updated_at
+BEGIN
+	UPDATE clients SET updated_at = datetime('now') WHERE id = OLD.id;
+END;
+`,
+	},
 }
 
 func Migrate(ctx context.Context, database *sql.DB, log *logger.Logger) error {

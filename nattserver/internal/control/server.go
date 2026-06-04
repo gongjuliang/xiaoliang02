@@ -230,23 +230,34 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	}
 	key, err := db.AuthenticateTunnelSecret(ctx, s.database, authReq.ClientSecret)
 	if err != nil {
-		_ = writeWithDeadline(conn, protocol.NewErrorMessage(first.RequestID, protocol.CodeUnauthorized, "unauthorized"))
+		_ = writeWithDeadline(conn, protocol.NewErrorMessage(first.RequestID, protocol.CodeUnauthorized, "秘钥错误"))
 		s.logError("tunnel auth failed from %s: %v", conn.RemoteAddr().String(), err)
 		return
 	}
 
+	tunnel, tunnelErr := db.GetTunnelByID(ctx, s.database, key.TunnelID)
 	remoteIP, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
 	if remoteIP == "" {
 		remoteIP = conn.RemoteAddr().String()
 	}
+	clientID := key.TunnelID
+	remotePort := 0
+	if tunnelErr == nil {
+		remotePort = tunnel.RemotePort
+	}
+	if tunnelErr == nil && tunnel.ClientID > 0 {
+		clientID = tunnel.ClientID
+	}
+	active := &clientConn{tunnelID: key.TunnelID, conn: conn}
+	if !s.register(active) {
+		_ = writeWithDeadline(conn, protocol.NewErrorMessage(first.RequestID, protocol.CodeConflict, "该连接正在占用，不得连接"))
+		return
+	}
+	defer s.unregister(key.TunnelID, active)
 	if err := db.MarkTunnelKeyOnline(ctx, s.database, key.TunnelID, remoteIP); err != nil {
 		s.logError("mark tunnel online failed tunnel_id=%d: %v", key.TunnelID, err)
 	}
-	_ = writeWithDeadline(conn, authResponse(first.RequestID, true, key.TunnelID, "ok"))
-
-	active := &clientConn{tunnelID: key.TunnelID, conn: conn}
-	s.register(active)
-	defer s.unregister(key.TunnelID, active)
+	_ = writeWithDeadline(conn, authResponse(first.RequestID, true, clientID, key.TunnelID, remotePort, "ok"))
 	s.startTunnelIfAutoStart(ctx, key.TunnelID)
 
 	_ = conn.SetDeadline(time.Time{})
@@ -314,14 +325,14 @@ func (s *Server) handleMessage(ctx context.Context, client *clientConn, message 
 	}
 }
 
-func (s *Server) register(client *clientConn) {
+func (s *Server) register(client *clientConn) bool {
 	s.mu.Lock()
-	old := s.active[client.tunnelID]
-	s.active[client.tunnelID] = client
-	s.mu.Unlock()
-	if old != nil {
-		_ = old.conn.Close()
+	defer s.mu.Unlock()
+	if s.active[client.tunnelID] != nil {
+		return false
 	}
+	s.active[client.tunnelID] = client
+	return true
 }
 
 func (s *Server) unregister(tunnelID int64, client *clientConn) {
@@ -367,10 +378,12 @@ func writeWithDeadline(conn net.Conn, message protocol.Message) error {
 	return protocol.WriteMessage(conn, message)
 }
 
-func authResponse(requestID string, success bool, tunnelID int64, message string) protocol.Message {
+func authResponse(requestID string, success bool, clientID int64, tunnelID int64, remotePort int, message string) protocol.Message {
 	response, _ := protocol.NewMessage(protocol.TypeAuthResponse, 0, tunnelID, "", protocol.AuthResponse{
 		Success:                  success,
+		ClientID:                 clientID,
 		TunnelID:                 tunnelID,
+		RemotePort:               remotePort,
 		ProtocolVersion:          protocol.Version,
 		HeartbeatIntervalSeconds: int(heartbeatInterval.Seconds()),
 		Message:                  message,

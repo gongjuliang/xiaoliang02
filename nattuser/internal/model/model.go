@@ -30,6 +30,7 @@ type TunnelConnection struct {
 	ServerHost   string                 `json:"server_host"`
 	ServerPort   int                    `json:"server_port"`
 	DataPort     int                    `json:"data_port"`
+	RemotePort   int                    `json:"remote_port"`
 	UseTLS       bool                   `json:"use_tls"`
 	ClientSecret string                 `json:"-"`
 	LocalHost    string                 `json:"local_host"`

@@ -9,9 +9,14 @@
     <style>
         body { min-height: auto; padding: 22px 24px; }
         .tunnel-form { display: grid; gap: 12px; padding: 12px 4px 0; }
-        .tunnel-form label { display: grid; gap: 6px; }
+        .tunnel-form label:not(.check-row) { display: grid; gap: 6px; }
         .tunnel-form input { width: 100%; }
         .inline-actions button { margin-right: 6px; }
+        .detail-cell { max-width: 230px; color: #687386; white-space: nowrap; }
+        .detail-box, .secret-box { max-height: 360px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+        .secret-box { font-family: monospace; background: #f5f7fb; border: 1px solid #dbe3ef; border-radius: 6px; padding: 8px; margin-top: 8px; }
+        .secret-mask { font-family: monospace; color: #334155; }
+        .secret-action, .detail-more { margin-left: 6px; }
     </style>
 </head>
 <body>
@@ -21,17 +26,39 @@
 <script src="/static/js/app.js"></script>
 <script>
 if (NATT.requireAuth()) {
+    function maskSecret(secret) {
+        var value = String(secret || "");
+        if (!value) return "-";
+        if (value.length <= 10) return "******";
+        return NATT.escapeHtml(value.slice(0, 6) + "******" + value.slice(-4));
+    }
+    function renderSecret(secret) {
+        if (!secret) return "-";
+        return '<span class="secret-mask">' + maskSecret(secret) + '</span>' +
+            '<button type="button" class="layui-btn layui-btn-primary layui-btn-xs secret-action" data-act="show-secret" data-secret="' + NATT.escapeHtml(secret) + '">查看</button>';
+    }
+    function renderDetailText(value) {
+        var text = String(value || "");
+        if (!$.trim(text)) return "-";
+        if (text.length <= 20) return NATT.escapeHtml(text);
+        return NATT.escapeHtml(text.slice(0, 20)) + '...' +
+            '<button type="button" class="layui-btn layui-btn-primary layui-btn-xs detail-more" data-act="show-detail" data-detail="' + NATT.escapeHtml(text) + '">详情</button>';
+    }
+    function showTextDialog(title, text, className) {
+        layui.layer.alert('<div class="' + className + '">' + NATT.escapeHtml(text || "-") + '</div>', { title: title, area: "560px" });
+    }
     function loadConnections() {
         NATT.request("GET", "/tunnel-connections?page=1&page_size=100").then(function (p) {
             var rows = (p.items || []).map(function (x) {
                 return '<tr><td>' + x.id + '</td><td>' + NATT.escapeHtml(x.name) + '</td><td>' +
-                    NATT.escapeHtml(x.server_host) + ':' + x.server_port + '</td><td>' +
-                    NATT.escapeHtml(x.local_host) + ':' + x.local_port + '</td><td>' + NATT.badge(x.status) +
+                    NATT.escapeHtml(x.server_host) + '</td><td>' + x.server_port + '</td><td>' + x.data_port + '</td><td>' +
+                    (x.remote_port || "-") + '</td><td>' + renderSecret(x.client_secret) + '</td><td>' + NATT.escapeHtml(x.local_host) + ':' + x.local_port + '</td><td>' + NATT.badge(x.status) +
+                    '</td><td class="detail-cell">' + renderDetailText(x.last_error) +
                     '</td><td class="inline-actions"><button type="button" class="layui-btn layui-btn-xs" data-act="start" data-id="' + x.id + '">连接</button>' +
                     '<button type="button" class="layui-btn layui-btn-primary layui-btn-xs" data-act="stop" data-id="' + x.id + '">断开</button>' +
                     '<button type="button" class="layui-btn layui-btn-danger layui-btn-xs" data-act="del" data-id="' + x.id + '">删除</button></td></tr>';
             }).join("");
-            $("#content").html('<div class="panel"><div class="toolbar"><h3>隧道连接</h3><button id="newConn" class="layui-btn primary" type="button">新增</button></div><table class="data-table"><thead><tr><th>ID</th><th>名称</th><th>服务端</th><th>本地目标</th><th>状态</th><th>操作</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
+            $("#content").html('<div class="panel"><div class="toolbar"><h3>隧道连接</h3><button id="newConn" class="layui-btn primary" type="button">新增</button></div><table class="data-table"><thead><tr><th>ID</th><th>名称</th><th>服务端地址</th><th>控制端口</th><th>数据端口</th><th>公网监听端口</th><th>服务端秘钥</th><th>本地目标</th><th>状态</th><th>状态详情</th><th>操作</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
         }).fail(NATT.showError);
     }
     function form() {
@@ -40,16 +67,16 @@ if (NATT.requireAuth()) {
             '<label>服务端地址<input id="sh" class="layui-input" value="127.0.0.1"></label>' +
             '<label>控制端口<input id="sp" class="layui-input" type="number" value="7000"></label>' +
             '<label>数据端口<input id="dp" class="layui-input" type="number" value="7001"></label>' +
-            '<label>隧道秘钥<input id="cs" class="layui-input" placeholder="nattserver 创建隧道后显示的 key"></label>' +
+            '<label>服务端秘钥<input id="cs" class="layui-input" placeholder="nattserver 创建隧道后显示的 key"></label>' +
             '<label>本地地址<input id="lh" class="layui-input" value="127.0.0.1"></label>' +
             '<label>本地端口<input id="lp" class="layui-input" type="number"></label>' +
-            '<label><span><input id="tls" type="checkbox"> TLS</span></label>' +
-            '<label><span><input id="as" type="checkbox"> 自启动</span></label></div>';
+            '<label class="check-row"><input id="tls" type="checkbox"><span>TLS</span></label>' +
+            '<label class="check-row"><input id="as" type="checkbox"><span>自启动</span></label></div>';
     }
     $("#content").on("click", "#newConn", function () {
         layui.layer.open({
             title: "新增隧道连接",
-            area: "560px",
+            area: "620px",
             content: form(),
             btn: ["保存", "取消"],
             yes: function (index) {
@@ -72,6 +99,14 @@ if (NATT.requireAuth()) {
     });
     $("#content").on("click", "button[data-act]", function () {
         var id = $(this).data("id"), act = $(this).data("act");
+        if (act === "show-detail") {
+            showTextDialog("状态详情", $(this).data("detail"), "detail-box");
+            return;
+        }
+        if (act === "show-secret") {
+            showTextDialog("服务端秘钥", $(this).data("secret"), "secret-box");
+            return;
+        }
         if (act === "del") {
             layui.layer.confirm("确定删除该隧道连接吗？", { title: "删除确认" }, function (index) {
                 layui.layer.close(index);

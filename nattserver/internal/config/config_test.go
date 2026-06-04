@@ -31,11 +31,6 @@ protocol:
 tunnel:
   remote_port_min: 20000
   remote_port_max: 20010
-mcp:
-  enabled: true
-  host: 127.0.0.1
-  port: 19092
-  access_token: server-mcp-token
 `
 
 const serverJSONConfig = `{
@@ -69,12 +64,6 @@ const serverJSONConfig = `{
   "tunnel": {
     "remote_port_min": 20000,
     "remote_port_max": 20010
-  },
-  "mcp": {
-    "enabled": true,
-    "host": "127.0.0.1",
-    "port": 19092,
-    "access_token": "server-mcp-token"
   }
 }`
 
@@ -106,9 +95,6 @@ func TestLoadMergesYAMLAndCleansPaths(t *testing.T) {
 	}
 	if cfg.Tunnel.RemotePortMin != 20000 || cfg.Tunnel.RemotePortMax != 20010 {
 		t.Fatalf("unexpected tunnel range: %+v", cfg.Tunnel)
-	}
-	if !cfg.MCP.Enabled || cfg.MCP.Host != "127.0.0.1" || cfg.MCP.Port != 19092 || cfg.MCP.AccessToken != "server-mcp-token" {
-		t.Fatalf("unexpected mcp config: %+v", cfg.MCP)
 	}
 }
 
@@ -224,10 +210,6 @@ func TestValidateRejectsInvalidPortsAndTunnelRange(t *testing.T) {
 			cfg.Tunnel.RemotePortMin = 30000
 			cfg.Tunnel.RemotePortMax = 20000
 		},
-		"mcp token empty when enabled": func(cfg *Config) {
-			cfg.MCP.Enabled = true
-			cfg.MCP.AccessToken = ""
-		},
 	}
 
 	for name, mutate := range cases {
@@ -279,8 +261,5 @@ func assertLoadedServerConfig(t *testing.T, cfg *Config) {
 	}
 	if cfg.Tunnel.RemotePortMin != 20000 || cfg.Tunnel.RemotePortMax != 20010 {
 		t.Fatalf("unexpected tunnel range: %+v", cfg.Tunnel)
-	}
-	if !cfg.MCP.Enabled || cfg.MCP.Host != "127.0.0.1" || cfg.MCP.Port != 19092 || cfg.MCP.AccessToken != "server-mcp-token" {
-		t.Fatalf("unexpected mcp config: %+v", cfg.MCP)
 	}
 }

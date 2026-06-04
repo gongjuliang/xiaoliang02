@@ -14,20 +14,11 @@ func TestOpsDashboardAuditAndConfigFlow(t *testing.T) {
 	router, database, tokens := setupAuthenticatedServerRouter(t)
 	defer database.Close()
 
-	clientResp := authorizedJSON(t, router, http.MethodPost, "/api/server/v1/clients", tokens.AccessToken, map[string]string{
-		"name": "ops-client",
-	})
-	var createdClient clientSecretResponse
-	decodeResponseData(t, clientResp, &createdClient)
-
 	tunnelResp := authorizedJSON(t, router, http.MethodPost, "/api/server/v1/tunnels", tokens.AccessToken, map[string]any{
 		"name":        "ops-tunnel",
-		"client_id":   createdClient.Client.ID,
 		"remote_port": 18081,
 	})
-	var createdTunnel struct {
-		ID int64 `json:"id"`
-	}
+	var createdTunnel tunnelSecretResponse
 	decodeResponseData(t, tunnelResp, &createdTunnel)
 
 	authorizedJSON(t, router, http.MethodPost, "/api/server/v1/tunnels/1/start", tokens.AccessToken, nil)
@@ -52,31 +43,34 @@ func TestOpsDashboardAuditAndConfigFlow(t *testing.T) {
 	if configData["current"] == nil || configData["editable_keys"] == nil {
 		t.Fatalf("unexpected config data: %+v", configData)
 	}
+	assertEditableKeysAreHotReloadOnly(t, configData["editable_keys"])
 
 	updateResp := authorizedJSON(t, router, http.MethodPut, "/api/server/v1/config", tokens.AccessToken, map[string]any{
 		"settings": map[string]string{
 			"log.level":              "debug",
 			"tunnel.remote_port_min": "20000",
-			"http.port":              "18088",
 		},
 	})
 	var updateData struct {
 		Updated []configUpdateResult `json:"updated"`
 	}
 	decodeResponseData(t, updateResp, &updateData)
-	if len(updateData.Updated) != 3 {
-		t.Fatalf("updated count=%d want=3", len(updateData.Updated))
+	if len(updateData.Updated) != 2 {
+		t.Fatalf("updated count=%d want=2", len(updateData.Updated))
 	}
 	if !hasConfigResult(updateData.Updated, "log.level", true, false) {
 		t.Fatalf("missing hot reload log.level result: %+v", updateData.Updated)
 	}
-	if !hasConfigResult(updateData.Updated, "http.port", false, true) {
-		t.Fatalf("missing restart required http.port result: %+v", updateData.Updated)
-	}
+
+	restartConfig := authorizedJSONAllowStatus(t, router, http.MethodPut, "/api/server/v1/config", tokens.AccessToken, map[string]any{
+		"settings": map[string]string{
+			"http.port": "18088",
+		},
+	}, http.StatusBadRequest)
+	assertResponseMessageContains(t, restartConfig, "该配置不支持热更新")
 
 	rejected := authorizedJSONAllowStatus(t, router, http.MethodPost, "/api/server/v1/tunnels", tokens.AccessToken, map[string]any{
 		"name":        "too-low",
-		"client_id":   createdClient.Client.ID,
 		"remote_port": 19999,
 	}, http.StatusBadRequest)
 	assertResponseCode(t, rejected, CodeBadRequest)
@@ -110,4 +104,24 @@ func hasConfigResult(results []configUpdateResult, key string, hotReloaded bool,
 		}
 	}
 	return false
+}
+
+func assertEditableKeysAreHotReloadOnly(t *testing.T, raw any) {
+	t.Helper()
+	keys, ok := raw.([]any)
+	if !ok {
+		t.Fatalf("editable_keys has unexpected type %T", raw)
+	}
+	if len(keys) == 0 {
+		t.Fatal("editable_keys must include hot reload keys")
+	}
+	for _, item := range keys {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			t.Fatalf("editable key has unexpected type %T", item)
+		}
+		if entry["hot_reload"] != true {
+			t.Fatalf("editable key is not hot reloadable: %+v", entry)
+		}
+	}
 }

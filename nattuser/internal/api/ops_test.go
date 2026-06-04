@@ -15,12 +15,14 @@ func TestClientOpsStatusAuditAndConfigFlow(t *testing.T) {
 	router, database, tokens := setupAuthenticatedClientRouter(t)
 	defer database.Close()
 
-	authorizedJSON(t, router, http.MethodPost, "/api/client/v1/servers", tokens.AccessToken, map[string]any{
+	authorizedJSON(t, router, http.MethodPost, "/api/client/v1/tunnel-connections", tokens.AccessToken, map[string]any{
 		"name":          "status-server",
 		"server_host":   "example.com",
 		"client_secret": "natt_status_secret",
+		"local_host":    "127.0.0.1",
+		"local_port":    8080,
 	})
-	authorizedJSON(t, router, http.MethodPost, "/api/client/v1/servers/1/start", tokens.AccessToken, nil)
+	authorizedJSON(t, router, http.MethodPost, "/api/client/v1/tunnel-connections/1/start", tokens.AccessToken, nil)
 
 	statusResp := authorizedJSON(t, router, http.MethodGet, "/api/client/v1/status", tokens.AccessToken, nil)
 	var statusData struct {
@@ -52,38 +54,44 @@ func TestClientOpsStatusAuditAndConfigFlow(t *testing.T) {
 	if configData["current"] == nil || configData["editable_keys"] == nil {
 		t.Fatalf("unexpected config data: %+v", configData)
 	}
+	assertEditableKeysAreHotReloadOnly(t, configData["editable_keys"])
 
 	updateResp := authorizedJSON(t, router, http.MethodPut, "/api/client/v1/config", tokens.AccessToken, map[string]any{
 		"settings": map[string]string{
 			"log.level":                    "debug",
 			"server_defaults.control_port": "7200",
 			"server_defaults.use_tls":      "true",
-			"http.port":                    "19080",
 		},
 	})
 	var updateData struct {
 		Updated []configUpdateResult `json:"updated"`
 	}
 	decodeResponseData(t, updateResp, &updateData)
-	if len(updateData.Updated) != 4 {
-		t.Fatalf("updated count=%d want=4", len(updateData.Updated))
+	if len(updateData.Updated) != 3 {
+		t.Fatalf("updated count=%d want=3", len(updateData.Updated))
 	}
 	if !hasConfigResult(updateData.Updated, "server_defaults.control_port", true, false) {
 		t.Fatalf("missing hot reload control port result: %+v", updateData.Updated)
 	}
-	if !hasConfigResult(updateData.Updated, "http.port", false, true) {
-		t.Fatalf("missing restart required http.port result: %+v", updateData.Updated)
-	}
 
-	defaultedResp := authorizedJSON(t, router, http.MethodPost, "/api/client/v1/servers", tokens.AccessToken, map[string]any{
+	defaultedResp := authorizedJSON(t, router, http.MethodPost, "/api/client/v1/tunnel-connections", tokens.AccessToken, map[string]any{
 		"name":          "defaulted-after-config",
 		"client_secret": "natt_default_after_config",
+		"local_host":    "127.0.0.1",
+		"local_port":    8080,
 	})
 	var defaulted model.ServerConnection
 	decodeResponseData(t, defaultedResp, &defaulted)
 	if defaulted.ServerPort != 7200 || !defaulted.UseTLS {
 		t.Fatalf("hot updated defaults were not applied: %+v", defaulted)
 	}
+
+	restartConfig := authorizedJSONAllowStatus(t, router, http.MethodPut, "/api/client/v1/config", tokens.AccessToken, map[string]any{
+		"settings": map[string]string{
+			"http.port": "19080",
+		},
+	}, http.StatusBadRequest)
+	assertResponseMessageContains(t, restartConfig, "该配置不支持热更新")
 
 	badConfig := authorizedJSONAllowStatus(t, router, http.MethodPut, "/api/client/v1/config", tokens.AccessToken, map[string]any{
 		"settings": map[string]string{
@@ -118,10 +126,12 @@ func TestClientLocalTunnelCRUDFlow(t *testing.T) {
 	router, database, tokens := setupAuthenticatedClientRouter(t)
 	defer database.Close()
 
-	serverResp := authorizedJSON(t, router, http.MethodPost, "/api/client/v1/servers", tokens.AccessToken, map[string]any{
+	serverResp := authorizedJSON(t, router, http.MethodPost, "/api/client/v1/tunnel-connections", tokens.AccessToken, map[string]any{
 		"name":          "edge-server",
 		"server_host":   "127.0.0.1",
 		"client_secret": "secret-for-local-tunnel",
+		"local_host":    "127.0.0.1",
+		"local_port":    8080,
 	})
 	var server model.ServerConnection
 	decodeResponseData(t, serverResp, &server)
@@ -187,4 +197,24 @@ func hasConfigResult(results []configUpdateResult, key string, hotReloaded bool,
 		}
 	}
 	return false
+}
+
+func assertEditableKeysAreHotReloadOnly(t *testing.T, raw any) {
+	t.Helper()
+	keys, ok := raw.([]any)
+	if !ok {
+		t.Fatalf("editable_keys has unexpected type %T", raw)
+	}
+	if len(keys) == 0 {
+		t.Fatal("editable_keys must include hot reload keys")
+	}
+	for _, item := range keys {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			t.Fatalf("editable key has unexpected type %T", item)
+		}
+		if entry["hot_reload"] != true {
+			t.Fatalf("editable key is not hot reloadable: %+v", entry)
+		}
+	}
 }

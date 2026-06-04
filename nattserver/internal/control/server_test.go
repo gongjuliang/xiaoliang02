@@ -36,6 +36,15 @@ func TestServerAuthenticatesHeartbeatAndMarksOfflineOnClose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create client: %v", err)
 	}
+	if _, err := db.CreateTunnel(ctx, database, db.CreateTunnelParams{
+		Name:       "client-a-control",
+		ClientID:   client.ID,
+		Protocol:   model.TunnelProtocolTCP,
+		RemoteHost: "127.0.0.1",
+		RemotePort: freeTCPPort(t),
+	}); err != nil {
+		t.Fatalf("create tunnel: %v", err)
+	}
 
 	port := freeTCPPort(t)
 	server := NewServer(config.ProtocolConfig{
@@ -122,6 +131,15 @@ func TestServerMarksOfflineAfterThreeHeartbeatTimeouts(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("create client: %v", err)
+	}
+	if _, err := db.CreateTunnel(ctx, database, db.CreateTunnelParams{
+		Name:       "client-a-timeout",
+		ClientID:   client.ID,
+		Protocol:   model.TunnelProtocolTCP,
+		RemoteHost: "127.0.0.1",
+		RemotePort: freeTCPPort(t),
+	}); err != nil {
+		t.Fatalf("create tunnel: %v", err)
 	}
 
 	port := freeTCPPort(t)
@@ -290,6 +308,96 @@ func TestServerRejectsInvalidClientSecretWithProtocolError(t *testing.T) {
 	if protocolErr.Code != protocol.CodeUnauthorized {
 		t.Fatalf("error code=%s want=%s", protocolErr.Code, protocol.CodeUnauthorized)
 	}
+	if protocolErr.Message != "秘钥错误" {
+		t.Fatalf("error message=%q want 秘钥错误", protocolErr.Message)
+	}
+
+	cancel()
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("server run returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for server shutdown")
+	}
+}
+
+func TestServerRejectsSecondControlConnectionWhileTunnelIsOccupied(t *testing.T) {
+	ctx := context.Background()
+	database, err := db.Open(ctx, filepath.Join(t.TempDir(), "test.db"), nil)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer database.Close()
+
+	secretHash, err := auth.HashPassword("natt_client_secret")
+	if err != nil {
+		t.Fatalf("hash client secret: %v", err)
+	}
+	client, err := db.CreateClient(ctx, database, db.CreateClientParams{
+		Name:       "client-a",
+		SecretHash: secretHash,
+		SecretHint: auth.SecretHint("natt_client_secret"),
+	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	if _, err := db.CreateTunnel(ctx, database, db.CreateTunnelParams{
+		Name:       "occupied",
+		ClientID:   client.ID,
+		Protocol:   model.TunnelProtocolTCP,
+		RemoteHost: "127.0.0.1",
+		RemotePort: freeTCPPort(t),
+	}); err != nil {
+		t.Fatalf("create tunnel: %v", err)
+	}
+
+	port := freeTCPPort(t)
+	server := NewServer(config.ProtocolConfig{
+		ControlHost: "127.0.0.1",
+		ControlPort: port,
+	}, database, nil)
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- server.Run(runCtx)
+	}()
+
+	firstConn := authenticateFakeClient(t, port, "natt_client_secret")
+	defer firstConn.Close()
+
+	secondConn := dialWithRetry(t, fmt.Sprintf("127.0.0.1:%d", port))
+	defer secondConn.Close()
+	authReq, err := protocol.NewMessage(protocol.TypeAuthRequest, 0, 0, "", protocol.AuthRequest{
+		ClientSecret:    "natt_client_secret",
+		ClientName:      "client-b",
+		ClientVersion:   "test-version",
+		ProtocolVersion: protocol.Version,
+	})
+	if err != nil {
+		t.Fatalf("build auth request: %v", err)
+	}
+	if err := protocol.WriteMessage(secondConn, authReq); err != nil {
+		t.Fatalf("write auth request: %v", err)
+	}
+	errorMsg, err := protocol.ReadMessage(secondConn)
+	if err != nil {
+		t.Fatalf("read occupied auth error: %v", err)
+	}
+	protocolErr, err := protocol.DecodePayload[protocol.ProtocolError](errorMsg)
+	if err != nil {
+		t.Fatalf("decode occupied auth error: %v", err)
+	}
+	if errorMsg.Type != protocol.TypeError || protocolErr.Code != protocol.CodeConflict || protocolErr.Message != "该连接正在占用，不得连接" {
+		t.Fatalf("unexpected occupied error message=%+v payload=%+v", errorMsg, protocolErr)
+	}
+
+	_ = firstConn.Close()
+	waitForClientStatus(t, database, client.ID, model.OnlineStatusOffline)
+	thirdConn := authenticateFakeClient(t, port, "natt_client_secret")
+	_ = thirdConn.Close()
 
 	cancel()
 	select {

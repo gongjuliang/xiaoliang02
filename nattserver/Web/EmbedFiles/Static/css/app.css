@@ -127,6 +127,21 @@ textarea {
     font-size: 13px;
 }
 
+.captcha-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+}
+
+.captcha-question {
+    min-height: 28px;
+    display: inline-flex;
+    align-items: center;
+    color: var(--primary);
+    font-size: 14px;
+}
+
 .app-shell {
     min-height: 100vh;
     display: grid;
@@ -204,6 +219,19 @@ textarea {
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
+}
+
+.check-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 28px;
+}
+
+.check-row input[type="checkbox"] {
+    width: auto;
+    min-height: auto;
+    margin: 0;
 }
 
 .content {

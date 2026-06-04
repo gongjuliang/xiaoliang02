@@ -18,24 +18,21 @@ func TestTunnelManagementFlow(t *testing.T) {
 	router, database, tokens := setupAuthenticatedServerRouter(t)
 	defer database.Close()
 
-	clientResp := authorizedJSON(t, router, http.MethodPost, "/api/server/v1/clients", tokens.AccessToken, map[string]string{
-		"name": "office-client",
-	})
-	var createdClient clientSecretResponse
-	decodeResponseData(t, clientResp, &createdClient)
-
 	createBody := map[string]any{
 		"name":        "web-8080",
-		"client_id":   createdClient.Client.ID,
 		"remote_port": 18080,
 		"auto_start":  true,
 		"remark":      "local web",
 	}
 	createResp := authorizedJSON(t, router, http.MethodPost, "/api/server/v1/tunnels", tokens.AccessToken, createBody)
-	var created model.Tunnel
-	decodeResponseData(t, createResp, &created)
+	var createData tunnelSecretResponse
+	decodeResponseData(t, createResp, &createData)
+	created := createData.Tunnel
 	if created.ID == 0 || created.Protocol != model.TunnelProtocolTCP || !created.AutoStart {
 		t.Fatalf("unexpected created tunnel: %+v", created)
+	}
+	if createData.Secret == "" || createData.Key.SecretHint == "" {
+		t.Fatalf("create response did not include tunnel secret data: %+v", createData)
 	}
 	if created.Status != model.TunnelStatusStopped {
 		t.Fatalf("new tunnel status=%s want stopped", created.Status)
@@ -45,16 +42,30 @@ func TestTunnelManagementFlow(t *testing.T) {
 	conflictResp := authorizedJSONAllowStatus(t, router, http.MethodPost, "/api/server/v1/tunnels", tokens.AccessToken, createBody, http.StatusConflict)
 	assertResponseCode(t, conflictResp, CodeConflict)
 
-	listResp := authorizedJSON(t, router, http.MethodGet, "/api/server/v1/tunnels?client_id=1&page=1&page_size=10", tokens.AccessToken, nil)
+	listResp := authorizedJSON(t, router, http.MethodGet, "/api/server/v1/tunnels?page=1&page_size=10", tokens.AccessToken, nil)
 	var page PageResponse
 	decodeResponseData(t, listResp, &page)
 	if page.Total != 1 {
 		t.Fatalf("tunnel total=%d want=1", page.Total)
 	}
+	if _, err := database.Exec("UPDATE traffic_stats SET bytes_in = 123, bytes_out = 456 WHERE tunnel_id = ?", created.ID); err != nil {
+		t.Fatalf("seed traffic stats: %v", err)
+	}
+	trafficListResp := authorizedJSON(t, router, http.MethodGet, "/api/server/v1/tunnels?page=1&page_size=10", tokens.AccessToken, nil)
+	var trafficResp struct {
+		Data struct {
+			Items []model.Tunnel `json:"items"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(trafficListResp.Body.Bytes(), &trafficResp); err != nil {
+		t.Fatalf("decode traffic list response: %v", err)
+	}
+	if len(trafficResp.Data.Items) != 1 || trafficResp.Data.Items[0].BytesIn != 123 || trafficResp.Data.Items[0].BytesOut != 456 {
+		t.Fatalf("list did not include traffic bytes: %+v", trafficResp.Data.Items)
+	}
 
 	updateResp := authorizedJSON(t, router, http.MethodPut, "/api/server/v1/tunnels/1", tokens.AccessToken, map[string]any{
 		"name":        "web-9090",
-		"client_id":   createdClient.Client.ID,
 		"protocol":    "tcp",
 		"remote_host": "0.0.0.0",
 		"remote_port": 19090,
@@ -88,22 +99,15 @@ func TestTunnelManagementFlow(t *testing.T) {
 		t.Fatalf("deleted tunnel id=%d want=%d", deleted.ID, created.ID)
 	}
 	assertTrafficStatCount(t, database, created.ID, 0)
-	assertAuditLogCount(t, database, 7)
+	assertAuditLogCount(t, database, 6)
 }
 
 func TestTunnelCreateRejectsPortOutsideConfiguredRange(t *testing.T) {
 	router, database, tokens := setupAuthenticatedServerRouter(t)
 	defer database.Close()
 
-	clientResp := authorizedJSON(t, router, http.MethodPost, "/api/server/v1/clients", tokens.AccessToken, map[string]string{
-		"name": "office-client",
-	})
-	var createdClient clientSecretResponse
-	decodeResponseData(t, clientResp, &createdClient)
-
 	resp := authorizedJSONAllowStatus(t, router, http.MethodPost, "/api/server/v1/tunnels", tokens.AccessToken, map[string]any{
 		"name":        "bad-port",
-		"client_id":   createdClient.Client.ID,
 		"remote_port": 9999,
 	}, http.StatusBadRequest)
 	assertResponseCode(t, resp, CodeBadRequest)
@@ -113,15 +117,8 @@ func TestTunnelCreateIgnoresLegacyLocalTargetFields(t *testing.T) {
 	router, database, tokens := setupAuthenticatedServerRouter(t)
 	defer database.Close()
 
-	clientResp := authorizedJSON(t, router, http.MethodPost, "/api/server/v1/clients", tokens.AccessToken, map[string]string{
-		"name": "office-client",
-	})
-	var createdClient clientSecretResponse
-	decodeResponseData(t, clientResp, &createdClient)
-
 	resp := authorizedJSON(t, router, http.MethodPost, "/api/server/v1/tunnels", tokens.AccessToken, map[string]any{
 		"name":        "web-no-local",
-		"client_id":   createdClient.Client.ID,
 		"local_host":  "10.1.2.3",
 		"local_port":  1234,
 		"remote_port": 18081,
@@ -159,24 +156,121 @@ func TestTunnelStartReturnsClearConflictErrors(t *testing.T) {
 			router, database, tokens := setupAuthenticatedServerRouterWithRuntime(t, fakeTunnelRuntime{startErr: tc.err})
 			defer database.Close()
 
-			clientResp := authorizedJSON(t, router, http.MethodPost, "/api/server/v1/clients", tokens.AccessToken, map[string]string{
-				"name": "office-client",
-			})
-			var createdClient clientSecretResponse
-			decodeResponseData(t, clientResp, &createdClient)
-
 			createResp := authorizedJSON(t, router, http.MethodPost, "/api/server/v1/tunnels", tokens.AccessToken, map[string]any{
 				"name":        "web-8080",
-				"client_id":   createdClient.Client.ID,
 				"remote_port": 18080,
 			})
-			var created model.Tunnel
+			var created tunnelSecretResponse
 			decodeResponseData(t, createResp, &created)
 
 			resp := authorizedJSONAllowStatus(t, router, http.MethodPost, "/api/server/v1/tunnels/1/start", tokens.AccessToken, nil, http.StatusConflict)
 			assertResponseCode(t, resp, CodeConflict)
 			assertResponseMessageContains(t, resp, tc.wantMessage)
 		})
+	}
+}
+
+func TestTunnelListReturnsPersistedSecretWithoutHash(t *testing.T) {
+	router, database, tokens := setupAuthenticatedServerRouter(t)
+	defer database.Close()
+
+	createResp := authorizedJSON(t, router, http.MethodPost, "/api/server/v1/tunnels", tokens.AccessToken, map[string]any{
+		"name":        "secret-visible",
+		"remote_port": 18082,
+	})
+	var created tunnelSecretResponse
+	decodeResponseData(t, createResp, &created)
+
+	listResp := authorizedJSON(t, router, http.MethodGet, "/api/server/v1/tunnels?page=1&page_size=10", tokens.AccessToken, nil)
+	if strings.Contains(listResp.Body.String(), "secret_hash") {
+		t.Fatal("list response must not expose secret_hash")
+	}
+	var resp struct {
+		Code int `json:"code"`
+		Data struct {
+			Items []model.Tunnel `json:"items"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(listResp.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode list response: %v", err)
+	}
+	if len(resp.Data.Items) != 1 {
+		t.Fatalf("list items=%d want=1", len(resp.Data.Items))
+	}
+	item := resp.Data.Items[0]
+	if item.Secret != created.Secret {
+		t.Fatalf("list secret=%q want created secret=%q", item.Secret, created.Secret)
+	}
+	if item.SecretHint == "" || item.LastError != "" {
+		t.Fatalf("unexpected list tunnel fields: %+v", item)
+	}
+}
+
+func TestTunnelRotateSecretUpdatesListSecret(t *testing.T) {
+	router, database, tokens := setupAuthenticatedServerRouter(t)
+	defer database.Close()
+
+	createResp := authorizedJSON(t, router, http.MethodPost, "/api/server/v1/tunnels", tokens.AccessToken, map[string]any{
+		"name":        "rotate-visible",
+		"remote_port": 18083,
+	})
+	var created tunnelSecretResponse
+	decodeResponseData(t, createResp, &created)
+
+	rotateResp := authorizedJSON(t, router, http.MethodPost, "/api/server/v1/tunnels/1/rotate-secret", tokens.AccessToken, nil)
+	var rotated tunnelSecretResponse
+	decodeResponseData(t, rotateResp, &rotated)
+	if rotated.Secret == "" || rotated.Secret == created.Secret {
+		t.Fatalf("unexpected rotated secret: old=%q new=%q", created.Secret, rotated.Secret)
+	}
+
+	listResp := authorizedJSON(t, router, http.MethodGet, "/api/server/v1/tunnels?page=1&page_size=10", tokens.AccessToken, nil)
+	var resp struct {
+		Data struct {
+			Items []model.Tunnel `json:"items"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(listResp.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode list response: %v", err)
+	}
+	if got := resp.Data.Items[0].Secret; got != rotated.Secret {
+		t.Fatalf("list secret=%q want rotated secret=%q", got, rotated.Secret)
+	}
+	if strings.Contains(listResp.Body.String(), created.Secret) {
+		t.Fatal("list response still contains old secret after rotation")
+	}
+}
+
+func TestTunnelListFallsBackToSecretHintForLegacyKeys(t *testing.T) {
+	router, database, tokens := setupAuthenticatedServerRouter(t)
+	defer database.Close()
+
+	authorizedJSON(t, router, http.MethodPost, "/api/server/v1/tunnels", tokens.AccessToken, map[string]any{
+		"name":        "legacy-secret",
+		"remote_port": 18084,
+	})
+	if _, err := database.Exec("UPDATE tunnel_keys SET secret_plain = '' WHERE tunnel_id = 1"); err != nil {
+		t.Fatalf("clear legacy secret_plain: %v", err)
+	}
+
+	listResp := authorizedJSON(t, router, http.MethodGet, "/api/server/v1/tunnels?page=1&page_size=10", tokens.AccessToken, nil)
+	var resp struct {
+		Data struct {
+			Items []model.Tunnel `json:"items"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(listResp.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode list response: %v", err)
+	}
+	if len(resp.Data.Items) != 1 {
+		t.Fatalf("list items=%d want=1", len(resp.Data.Items))
+	}
+	item := resp.Data.Items[0]
+	if item.Secret != "" {
+		t.Fatalf("legacy tunnel secret=%q want empty", item.Secret)
+	}
+	if item.SecretHint == "" {
+		t.Fatalf("legacy tunnel missing secret_hint: %+v", item)
 	}
 }
 

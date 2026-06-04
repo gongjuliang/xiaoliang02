@@ -70,6 +70,12 @@ type pageResult struct {
 func NewServerRouter(cfg config.MCPConfig, database *sql.DB, log *logger.Logger, runtime TunnelRuntime, tunnelCfg ...config.TunnelConfig) *gin.Engine {
 	router := gin.New()
 	router.Use(gin.Recovery())
+	if database != nil {
+		_ = db.UpsertSetting(context.Background(), database, "mcp.enabled", strconv.FormatBool(cfg.Enabled))
+		if strings.TrimSpace(cfg.AccessToken) != "" {
+			_ = db.UpsertSetting(context.Background(), database, "mcp.access_token", cfg.AccessToken)
+		}
+	}
 	RegisterServerRoutes(router, database, log, runtime, tunnelCfg...)
 
 	router.NoRoute(func(c *gin.Context) {
@@ -100,12 +106,19 @@ func (h *serverHandler) callTool(c *gin.Context) {
 	var req mcpRequest
 	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.Tool) == "" {
 		writeFail(c, http.StatusBadRequest, "invalid MCP tool request")
+		h.auditToolCall(c, "invalid_request", nil)
 		return
 	}
+	tool := strings.TrimSpace(req.Tool)
+	defer h.auditToolCall(c, tool, req.Params)
 
 	// Dispatch is explicit rather than reflective, which keeps the MCP surface
 	// limited to the documented server.* tools.
-	switch strings.TrimSpace(req.Tool) {
+	switch tool {
+	case "server.list_clients":
+		h.listClients(c, req.Params)
+	case "server.get_client":
+		h.getClient(c, req.Params)
 	case "server.list_tunnels":
 		h.listTunnels(c, req.Params)
 	case "server.create_tunnel":
@@ -121,6 +134,36 @@ func (h *serverHandler) callTool(c *gin.Context) {
 	default:
 		writeFail(c, http.StatusBadRequest, "unknown MCP tool")
 	}
+}
+
+func (h *serverHandler) listClients(c *gin.Context, raw json.RawMessage) {
+	params, ok := bindPageParams(c, raw)
+	if !ok {
+		return
+	}
+	clients, total, err := db.ListClients(c.Request.Context(), h.database, params.limit(), params.offset())
+	if err != nil {
+		h.writeError(c, err, "list clients failed")
+		return
+	}
+	writeOK(c, pageResult{Items: clients, Total: total, Page: params.Page, PageSize: params.PageSize})
+}
+
+func (h *serverHandler) getClient(c *gin.Context, raw json.RawMessage) {
+	var params idParams
+	if !bindParams(c, raw, &params) {
+		return
+	}
+	if params.ID <= 0 {
+		writeFail(c, http.StatusBadRequest, "id is required")
+		return
+	}
+	client, err := db.GetClientByID(c.Request.Context(), h.database, params.ID)
+	if err != nil {
+		h.writeError(c, err, "get client failed")
+		return
+	}
+	writeOK(c, client)
 }
 
 func (h *serverHandler) listTunnels(c *gin.Context, raw json.RawMessage) {
@@ -170,7 +213,7 @@ func (h *serverHandler) createTunnel(c *gin.Context, raw json.RawMessage) {
 		h.writeError(c, err, "generate tunnel secret failed")
 		return
 	}
-	key, err := db.CreateTunnelKey(c.Request.Context(), h.database, db.CreateTunnelKeyParams{TunnelID: tunnel.ID, SecretHash: secretHash, SecretHint: secretHint})
+	key, err := db.CreateTunnelKey(c.Request.Context(), h.database, db.CreateTunnelKeyParams{TunnelID: tunnel.ID, SecretHash: secretHash, SecretHint: secretHint, SecretPlain: secret})
 	if err != nil {
 		h.writeError(c, err, "create tunnel key failed")
 		return
@@ -273,6 +316,19 @@ func (h *serverHandler) validateTunnelParams(c *gin.Context, params *tunnelParam
 
 func (h *serverHandler) audit(c *gin.Context, action string, tunnelID int64, content string) {
 	_ = db.InsertAuditLog(c.Request.Context(), h.database, "mcp", action, "tunnel", strconv.FormatInt(tunnelID, 10), content, c.ClientIP())
+}
+
+func (h *serverHandler) auditToolCall(c *gin.Context, tool string, raw json.RawMessage) {
+	if h.database == nil {
+		return
+	}
+	status := c.Writer.Status()
+	outcome := "成功"
+	if status < 200 || status >= 300 {
+		outcome = "失败"
+	}
+	content := fmt.Sprintf("MCP 工具调用%s tool=%s status=%d params=%s", outcome, tool, status, sanitizeMCPParams(raw))
+	_ = db.InsertAuditLog(c.Request.Context(), h.database, "mcp", "mcp_tool_call", "mcp_tool", tool, content, c.ClientIP())
 }
 
 func (h *serverHandler) writeError(c *gin.Context, err error, fallback string) {
@@ -414,4 +470,48 @@ func writeOK(c *gin.Context, data any) {
 
 func writeFail(c *gin.Context, status int, message string) {
 	c.JSON(status, mcpResponse{Success: false, Message: message, Data: nil})
+}
+
+func sanitizeMCPParams(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "{}"
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "参数无法解析"
+	}
+	sanitized := sanitizeMCPValue(value)
+	encoded, err := json.Marshal(sanitized)
+	if err != nil {
+		return "参数无法编码"
+	}
+	return string(encoded)
+}
+
+func sanitizeMCPValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, item := range typed {
+			if isSensitiveMCPKey(key) {
+				out[key] = "[已脱敏]"
+				continue
+			}
+			out[key] = sanitizeMCPValue(item)
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, sanitizeMCPValue(item))
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+func isSensitiveMCPKey(key string) bool {
+	key = strings.ToLower(strings.TrimSpace(key))
+	return strings.Contains(key, "secret") || strings.Contains(key, "token") || strings.Contains(key, "password") || strings.Contains(key, "key")
 }

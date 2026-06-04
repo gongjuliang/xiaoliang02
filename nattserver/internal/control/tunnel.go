@@ -82,7 +82,7 @@ func (s *Server) StartTunnel(ctx context.Context, id int64) (model.Tunnel, error
 		conns:    make(map[string][]net.Conn),
 	}
 
-	startCommand, err := protocol.NewMessage(protocol.TypeTunnelStart, 0, tunnel.ID, "", tunnelPayload(tunnel))
+	startCommand, err := protocol.NewMessage(protocol.TypeTunnelStart, tunnel.ClientID, tunnel.ID, "", tunnelPayload(tunnel))
 	if err != nil {
 		_ = listener.Close()
 		return s.markTunnelError(ctx, tunnel.ID, err)
@@ -119,7 +119,7 @@ func (s *Server) StopTunnel(ctx context.Context, id int64) (model.Tunnel, error)
 		active.stop()
 	}
 
-	stopCommand, err := protocol.NewMessage(protocol.TypeTunnelStop, 0, tunnel.ID, "", tunnelPayload(tunnel))
+	stopCommand, err := protocol.NewMessage(protocol.TypeTunnelStop, tunnel.ClientID, tunnel.ID, "", tunnelPayload(tunnel))
 	if err == nil {
 		if err := s.SendToClient(tunnel.ID, stopCommand); err != nil {
 			s.logError("send tunnel_stop failed tunnel_id=%d: %v", tunnel.ID, err)
@@ -178,7 +178,7 @@ func (s *Server) handlePublicConn(active *activeTunnel, publicConn net.Conn) {
 
 	// Each external TCP connection gets a fresh connection_id. The client opens
 	// a matching data socket and binds it back with data_bind before proxying.
-	dataOpen, err := protocol.NewMessage(protocol.TypeDataOpen, 0, active.tunnel.ID, connectionID, protocol.DataOpen{
+	dataOpen, err := protocol.NewMessage(protocol.TypeDataOpen, active.tunnel.ClientID, active.tunnel.ID, connectionID, protocol.DataOpen{
 		DataHost: advertisedDataHost(s.cfg.DataHost),
 		DataPort: s.cfg.DataPort,
 	})
@@ -245,7 +245,7 @@ func (s *Server) handleDataConn(ctx context.Context, conn net.Conn) {
 	}
 	key, err := db.AuthenticateTunnelSecret(ctx, s.database, bind.ClientSecret)
 	if err != nil {
-		_ = writeWithDeadline(conn, protocol.NewErrorMessage(message.RequestID, protocol.CodeUnauthorized, "unauthorized"))
+		_ = writeWithDeadline(conn, protocol.NewErrorMessage(message.RequestID, protocol.CodeUnauthorized, "秘钥错误"))
 		return
 	}
 	pending := s.getPending(message.ConnectionID)

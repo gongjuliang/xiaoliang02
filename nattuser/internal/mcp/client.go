@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -71,6 +72,7 @@ type localTunnelStatus struct {
 	ServerHost         string                       `json:"server_host"`
 	ServerPort         int                          `json:"server_port"`
 	DataPort           int                          `json:"data_port"`
+	RemotePort         int                          `json:"remote_port"`
 	UseTLS             bool                         `json:"use_tls"`
 	Status             model.ServerConnectionStatus `json:"status"`
 	LastError          string                       `json:"last_error"`
@@ -80,6 +82,12 @@ type localTunnelStatus struct {
 func NewClientRouter(cfg config.MCPConfig, database *sql.DB, log *logger.Logger) *gin.Engine {
 	router := gin.New()
 	router.Use(gin.Recovery())
+	if database != nil {
+		_ = db.UpsertSetting(context.Background(), database, "mcp.enabled", strconv.FormatBool(cfg.Enabled))
+		if strings.TrimSpace(cfg.AccessToken) != "" {
+			_ = db.UpsertSetting(context.Background(), database, "mcp.access_token", cfg.AccessToken)
+		}
+	}
 	RegisterClientRoutes(router, database, log)
 
 	router.NoRoute(func(c *gin.Context) {
@@ -108,18 +116,23 @@ func (h *clientHandler) callTool(c *gin.Context) {
 	var req mcpRequest
 	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.Tool) == "" {
 		writeFail(c, http.StatusBadRequest, "invalid MCP tool request")
+		h.auditToolCall(c, "invalid_request", nil)
 		return
 	}
+	tool := strings.TrimSpace(req.Tool)
+	defer h.auditToolCall(c, tool, req.Params)
 
 	// Dispatch is explicit rather than reflective, which keeps the MCP surface
 	// limited to the documented client.* tools.
-	switch strings.TrimSpace(req.Tool) {
-	case "client.list_tunnel_connections":
+	switch tool {
+	case "client.list_tunnel_connections", "client.list_servers":
 		h.listServers(c, req.Params)
-	case "client.connect_tunnel":
+	case "client.connect_tunnel", "client.connect_server":
 		h.connectServer(c, req.Params)
-	case "client.disconnect_tunnel":
+	case "client.disconnect_tunnel", "client.disconnect_server":
 		h.disconnectServer(c, req.Params)
+	case "client.list_tunnels":
+		h.listTunnels(c, req.Params)
 	case "client.get_network_status":
 		h.getNetworkStatus(c)
 	default:
@@ -193,6 +206,7 @@ func (h *clientHandler) listTunnels(c *gin.Context, raw json.RawMessage) {
 			ServerHost:         connection.ServerHost,
 			ServerPort:         connection.ServerPort,
 			DataPort:           connection.DataPort,
+			RemotePort:         connection.RemotePort,
 			UseTLS:             connection.UseTLS,
 			Status:             connection.Status,
 			LastError:          connection.LastError,
@@ -204,6 +218,19 @@ func (h *clientHandler) listTunnels(c *gin.Context, raw json.RawMessage) {
 
 func (h *clientHandler) audit(c *gin.Context, action string, connectionID int64, content string) {
 	_ = db.InsertAuditLog(c.Request.Context(), h.database, "mcp", action, "server_connection", strconv.FormatInt(connectionID, 10), content, c.ClientIP())
+}
+
+func (h *clientHandler) auditToolCall(c *gin.Context, tool string, raw json.RawMessage) {
+	if h.database == nil {
+		return
+	}
+	status := c.Writer.Status()
+	outcome := "成功"
+	if status < 200 || status >= 300 {
+		outcome = "失败"
+	}
+	content := fmt.Sprintf("MCP 工具调用%s tool=%s status=%d params=%s", outcome, tool, status, sanitizeMCPParams(raw))
+	_ = db.InsertAuditLog(c.Request.Context(), h.database, "mcp", "mcp_tool_call", "mcp_tool", tool, content, c.ClientIP())
 }
 
 func (h *clientHandler) writeError(c *gin.Context, err error, fallback string) {
@@ -352,4 +379,48 @@ func writeOK(c *gin.Context, data any) {
 
 func writeFail(c *gin.Context, status int, message string) {
 	c.JSON(status, mcpResponse{Success: false, Message: message, Data: nil})
+}
+
+func sanitizeMCPParams(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "{}"
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "参数无法解析"
+	}
+	sanitized := sanitizeMCPValue(value)
+	encoded, err := json.Marshal(sanitized)
+	if err != nil {
+		return "参数无法编码"
+	}
+	return string(encoded)
+}
+
+func sanitizeMCPValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, item := range typed {
+			if isSensitiveMCPKey(key) {
+				out[key] = "[已脱敏]"
+				continue
+			}
+			out[key] = sanitizeMCPValue(item)
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, sanitizeMCPValue(item))
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+func isSensitiveMCPKey(key string) bool {
+	key = strings.ToLower(strings.TrimSpace(key))
+	return strings.Contains(key, "secret") || strings.Contains(key, "token") || strings.Contains(key, "password") || strings.Contains(key, "key")
 }

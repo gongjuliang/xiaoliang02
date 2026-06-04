@@ -68,6 +68,50 @@ func TestServerMCPGetsDashboardFromSharedStats(t *testing.T) {
 	}
 }
 
+func TestServerMCPAuditsEveryToolCallAndSanitizesParams(t *testing.T) {
+	router, database := setupServerMCPRouter(t)
+	defer database.Close()
+
+	rec := callServerMCP(t, router, "server-mcp-token", "server.list_clients", map[string]any{
+		"page_size":     10,
+		"client_secret": "must-not-leak",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rec = callServerMCP(t, router, "server-mcp-token", "server.unknown_tool", map[string]any{
+		"access_token": "also-secret",
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unknown status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	logs, total, err := db.ListAuditLogs(context.Background(), database, 20, 0)
+	if err != nil {
+		t.Fatalf("list audit logs: %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("audit total=%d want=2 logs=%+v", total, logs)
+	}
+	if !hasAuditAction(logs, "mcp_tool_call") {
+		t.Fatalf("missing mcp_tool_call audit: %+v", logs)
+	}
+	for _, item := range logs {
+		if item.Action != "mcp_tool_call" {
+			continue
+		}
+		if item.TargetType != "mcp_tool" || item.TargetID == "" {
+			t.Fatalf("unexpected mcp audit target: %+v", item)
+		}
+		if bytes.Contains([]byte(item.Content), []byte("must-not-leak")) || bytes.Contains([]byte(item.Content), []byte("also-secret")) {
+			t.Fatalf("mcp audit leaked secret content: %+v", item)
+		}
+		if !bytes.Contains([]byte(item.Content), []byte("[已脱敏]")) {
+			t.Fatalf("mcp audit did not include sanitized marker: %+v", item)
+		}
+	}
+}
+
 func TestServerMCPSupportsClientAndTunnelQueries(t *testing.T) {
 	router, database := setupServerMCPRouter(t)
 	defer database.Close()
@@ -122,12 +166,20 @@ func TestServerMCPCreatesStartsStopsAndDeletesTunnelWithAuditLogs(t *testing.T) 
 	}
 	var createResp mcpResponse
 	decodeMCPResponse(t, rec, &createResp)
-	var created model.Tunnel
-	if err := json.Unmarshal(createResp.Data, &created); err != nil {
+	var createdPayload struct {
+		Tunnel model.Tunnel    `json:"tunnel"`
+		Key    model.TunnelKey `json:"key"`
+		Secret string          `json:"secret"`
+	}
+	if err := json.Unmarshal(createResp.Data, &createdPayload); err != nil {
 		t.Fatalf("decode created tunnel: %v", err)
 	}
+	created := createdPayload.Tunnel
 	if created.ID == 0 || created.Name != "mcp-created" || !created.AutoStart {
-		t.Fatalf("unexpected created tunnel: %+v", created)
+		t.Fatalf("unexpected created tunnel payload: %+v", createdPayload)
+	}
+	if createdPayload.Secret == "" || createdPayload.Key.SecretHint == "" {
+		t.Fatalf("created tunnel response missing secret data: %+v", createdPayload)
 	}
 
 	rec = callServerMCP(t, router, "server-mcp-token", "server.start_tunnel", map[string]any{"id": created.ID})
@@ -170,10 +222,10 @@ func TestServerMCPCreatesStartsStopsAndDeletesTunnelWithAuditLogs(t *testing.T) 
 	if err != nil {
 		t.Fatalf("list audit logs: %v", err)
 	}
-	if total != 4 {
-		t.Fatalf("audit total=%d want=4 logs=%+v", total, logs)
+	if total != 8 {
+		t.Fatalf("audit total=%d want=8 logs=%+v", total, logs)
 	}
-	for _, want := range []string{"mcp_tunnel_create", "mcp_tunnel_start", "mcp_tunnel_stop", "mcp_tunnel_delete"} {
+	for _, want := range []string{"mcp_tool_call", "mcp_tunnel_create", "mcp_tunnel_start", "mcp_tunnel_stop", "mcp_tunnel_delete"} {
 		if !hasAuditAction(logs, want) {
 			t.Fatalf("missing audit action %s in %+v", want, logs)
 		}
@@ -208,14 +260,18 @@ func setupServerMCPRouter(t *testing.T) (http.Handler, *sql.DB) {
 	if err := db.MarkClientOnline(ctx, database, client.ID, "127.0.0.1"); err != nil {
 		t.Fatalf("mark client online: %v", err)
 	}
-	if _, err := db.CreateTunnel(ctx, database, db.CreateTunnelParams{
+	tunnel, err := db.CreateTunnel(ctx, database, db.CreateTunnelParams{
 		Name:       "mcp-tunnel",
 		ClientID:   client.ID,
 		Protocol:   model.TunnelProtocolTCP,
 		RemoteHost: "0.0.0.0",
 		RemotePort: 18080,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("create tunnel: %v", err)
+	}
+	if err := db.MarkTunnelKeyOnline(ctx, database, tunnel.ID, "127.0.0.1"); err != nil {
+		t.Fatalf("mark tunnel key online: %v", err)
 	}
 
 	router := NewServerRouter(config.MCPConfig{

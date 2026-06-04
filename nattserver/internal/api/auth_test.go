@@ -9,9 +9,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"nattserver/internal/auth"
@@ -119,20 +121,35 @@ func TestAuthSecurityIntegration(t *testing.T) {
 		}
 	})
 
-	t.Run("login endpoint is rate limited", func(t *testing.T) {
-		router, database, publicKey := newAuthTestRouter(t, func(cfg *config.Config) {
-			cfg.Auth.LoginRateLimitPerMinute = 1
-		})
+	t.Run("login endpoint bans IP after ten failures", func(t *testing.T) {
+		router, database, publicKey := newAuthTestRouter(t, nil)
 		encryptedWrongPassword := encryptForPublicKey(t, publicKey, "wrong-password")
 
+		for i := 0; i < 10; i++ {
+			rec := loginWithStatus(t, router, "/api/server/v1/auth/login", "admin", encryptedWrongPassword)
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("failed login #%d status=%d body=%s", i+1, rec.Code, rec.Body.String())
+			}
+		}
 		rec := loginWithStatus(t, router, "/api/server/v1/auth/login", "admin", encryptedWrongPassword)
-		if rec.Code != http.StatusUnauthorized {
-			t.Fatalf("first failed login status=%d body=%s", rec.Code, rec.Body.String())
-		}
-		rec = loginWithStatus(t, router, "/api/server/v1/auth/login", "admin", encryptedWrongPassword)
 		if rec.Code != http.StatusTooManyRequests {
-			t.Fatalf("rate limited login status=%d body=%s", rec.Code, rec.Body.String())
+			t.Fatalf("banned login status=%d body=%s", rec.Code, rec.Body.String())
 		}
+		assertResponseMessageContains(t, rec, "登录失败次数过多")
+		assertResponseMessageContains(t, rec, "5 分钟")
+		assertAuditLogCount(t, database, 10)
+	})
+
+	t.Run("login requires valid captcha", func(t *testing.T) {
+		router, database, _ := newAuthTestRouter(t, func(cfg *config.Config) {
+			cfg.App.Environment = "development"
+		})
+
+		rec := loginWithStatusWithCaptcha(t, router, "/api/server/v1/auth/login", "admin", "admin123456", "missing", "0000")
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("invalid captcha login status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		assertResponseMessageContains(t, rec, "验证码不正确或已过期")
 		assertAuditLogCount(t, database, 1)
 	})
 }
@@ -235,9 +252,17 @@ func login(t *testing.T, router http.Handler, path string, encryptedPassword str
 
 func loginWithStatus(t *testing.T, router http.Handler, path string, username string, encryptedPassword string) *httptest.ResponseRecorder {
 	t.Helper()
+	captcha := fetchCaptcha(t, router, strings.TrimSuffix(path, "/login")+"/captcha")
+	return loginWithStatusWithCaptcha(t, router, path, username, encryptedPassword, captcha.ID, solveCaptcha(t, captcha.Question))
+}
+
+func loginWithStatusWithCaptcha(t *testing.T, router http.Handler, path string, username string, encryptedPassword string, captchaID string, captchaCode string) *httptest.ResponseRecorder {
+	t.Helper()
 	body, err := json.Marshal(map[string]string{
-		"username": username,
-		"password": encryptedPassword,
+		"username":     username,
+		"password":     encryptedPassword,
+		"captcha_id":   captchaID,
+		"captcha_code": captchaCode,
 	})
 	if err != nil {
 		t.Fatalf("marshal login body: %v", err)
@@ -247,6 +272,44 @@ func loginWithStatus(t *testing.T, router http.Handler, path string, username st
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(rec, req)
 	return rec
+}
+
+type testCaptcha struct {
+	ID       string `json:"captcha_id"`
+	Question string `json:"question"`
+}
+
+func fetchCaptcha(t *testing.T, router http.Handler, path string) testCaptcha {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("captcha status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Code int             `json:"code"`
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode captcha response: %v", err)
+	}
+	var captcha testCaptcha
+	if err := json.Unmarshal(resp.Data, &captcha); err != nil {
+		t.Fatalf("decode captcha data: %v", err)
+	}
+	if captcha.ID == "" || captcha.Question == "" {
+		t.Fatalf("captcha missing data: %+v", captcha)
+	}
+	return captcha
+}
+
+func solveCaptcha(t *testing.T, question string) string {
+	t.Helper()
+	var left, right int
+	if _, err := fmt.Sscanf(question, "%d + %d = ?", &left, &right); err != nil {
+		t.Fatalf("parse captcha question %q: %v", question, err)
+	}
+	return fmt.Sprintf("%d", left+right)
 }
 
 func refresh(t *testing.T, router http.Handler, path string, refreshToken string) auth.TokenPair {

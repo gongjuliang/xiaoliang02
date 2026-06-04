@@ -78,6 +78,10 @@ type Tunnel struct {
 	Status     TunnelStatus   `json:"status"`
 	AutoStart  bool           `json:"auto_start"`
 	LastError  string         `json:"last_error"`
+	Secret     string         `json:"secret,omitempty"`
+	SecretHint string         `json:"secret_hint,omitempty"`
+	BytesIn    int64          `json:"bytes_in"`
+	BytesOut   int64          `json:"bytes_out"`
 	Remark     string         `json:"remark"`
 	CreatedAt  string         `json:"created_at"`
 	UpdatedAt  string         `json:"updated_at"`
@@ -88,6 +92,7 @@ type TunnelKey struct {
 	TunnelID     int64           `json:"tunnel_id"`
 	SecretHash   string          `json:"-"`
 	SecretHint   string          `json:"secret_hint"`
+	SecretPlain  string          `json:"-"`
 	Status       TunnelKeyStatus `json:"status"`
 	OnlineStatus OnlineStatus    `json:"online_status"`
 	LastIP       string          `json:"last_ip"`

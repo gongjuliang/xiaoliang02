@@ -26,11 +26,6 @@ server_defaults:
   control_port: 17000
   data_port: 17001
   use_tls: true
-mcp:
-  enabled: true
-  host: 127.0.0.1
-  port: 18081
-  access_token: client-mcp-token
 `
 
 const clientJSONConfig = `{
@@ -57,12 +52,6 @@ const clientJSONConfig = `{
     "control_port": 17000,
     "data_port": 17001,
     "use_tls": true
-  },
-  "mcp": {
-    "enabled": true,
-    "host": "127.0.0.1",
-    "port": 18081,
-    "access_token": "client-mcp-token"
   }
 }`
 
@@ -94,9 +83,6 @@ func TestLoadMergesYAMLAndCleansPaths(t *testing.T) {
 		cfg.ServerDefaults.DataPort != 17001 ||
 		!cfg.ServerDefaults.UseTLS {
 		t.Fatalf("unexpected server defaults: %+v", cfg.ServerDefaults)
-	}
-	if !cfg.MCP.Enabled || cfg.MCP.Port != 18081 || cfg.MCP.AccessToken != "client-mcp-token" {
-		t.Fatalf("unexpected mcp config: %+v", cfg.MCP)
 	}
 }
 
@@ -202,10 +188,6 @@ func TestValidateRejectsInvalidPorts(t *testing.T) {
 		"data port below range": func(cfg *Config) {
 			cfg.ServerDefaults.DataPort = -1
 		},
-		"mcp token empty when enabled": func(cfg *Config) {
-			cfg.MCP.Enabled = true
-			cfg.MCP.AccessToken = ""
-		},
 	}
 
 	for name, mutate := range cases {
@@ -257,8 +239,5 @@ func assertLoadedClientConfig(t *testing.T, cfg *Config) {
 		cfg.ServerDefaults.DataPort != 17001 ||
 		!cfg.ServerDefaults.UseTLS {
 		t.Fatalf("unexpected server defaults: %+v", cfg.ServerDefaults)
-	}
-	if !cfg.MCP.Enabled || cfg.MCP.Port != 18081 || cfg.MCP.AccessToken != "client-mcp-token" {
-		t.Fatalf("unexpected mcp config: %+v", cfg.MCP)
 	}
 }

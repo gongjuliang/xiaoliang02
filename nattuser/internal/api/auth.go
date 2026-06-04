@@ -24,12 +24,15 @@ type AuthHandler struct {
 	jwtService             *auth.JWTService
 	sm2Cipher              *auth.SM2Cipher
 	rateLimiter            *RateLimiter
+	captchaStore           *CaptchaStore
 	allowPlaintextPassword bool
 }
 
 type loginRequest struct {
-	Username string `json:"username" binding:"required"`
-	Password string `json:"password" binding:"required"`
+	Username    string `json:"username" binding:"required"`
+	Password    string `json:"password" binding:"required"`
+	CaptchaID   string `json:"captcha_id" binding:"required"`
+	CaptchaCode string `json:"captcha_code" binding:"required"`
 }
 
 type refreshRequest struct {
@@ -52,12 +55,14 @@ func NewAuthHandler(cfg config.AuthConfig, database *sql.DB, log *logger.Logger)
 		jwtService:             jwtService,
 		sm2Cipher:              sm2Cipher,
 		rateLimiter:            NewRateLimiter(cfg.LoginRateLimitPerMinute, time.Minute),
+		captchaStore:           NewCaptchaStore(),
 		allowPlaintextPassword: cfg.AllowPlaintextPassword,
 	}, nil
 }
 
 func (h *AuthHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.GET("/auth/sm2-public-key", h.publicKey)
+	group.GET("/auth/captcha", h.captcha)
 	group.POST("/auth/login", h.login)
 	group.POST("/auth/refresh", h.refresh)
 
@@ -70,19 +75,19 @@ func (h *AuthHandler) JWTMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		header := c.GetHeader("Authorization")
 		if header == "" {
-			Fail(c, http.StatusUnauthorized, CodeUnauthorized, "authorization header is required")
+			Fail(c, http.StatusUnauthorized, CodeUnauthorized, "缺少 Authorization 请求头")
 			c.Abort()
 			return
 		}
 		token := strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
 		if token == header {
-			Fail(c, http.StatusUnauthorized, CodeUnauthorized, "authorization bearer token is required")
+			Fail(c, http.StatusUnauthorized, CodeUnauthorized, "缺少 Bearer 访问令牌")
 			c.Abort()
 			return
 		}
 		claims, err := h.jwtService.ParseAccessToken(token)
 		if err != nil {
-			Fail(c, http.StatusUnauthorized, CodeUnauthorized, "invalid or expired token")
+			Fail(c, http.StatusUnauthorized, CodeUnauthorized, "访问令牌无效或已过期")
 			c.Abort()
 			return
 		}
@@ -101,16 +106,31 @@ func (h *AuthHandler) publicKey(c *gin.Context) {
 	})
 }
 
+func (h *AuthHandler) captcha(c *gin.Context) {
+	challenge, err := h.captchaStore.Create()
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, CodeInternalError, "生成验证码失败")
+		return
+	}
+	OK(c, challenge)
+}
+
 func (h *AuthHandler) login(c *gin.Context) {
 	ip := c.ClientIP()
-	if !h.rateLimiter.Allow(ip) {
-		Fail(c, http.StatusTooManyRequests, CodeTooMany, "too many login attempts")
+	if wait, ok := h.rateLimiter.Allow(ip); !ok {
+		Fail(c, http.StatusTooManyRequests, CodeTooMany, "登录失败次数过多，请 "+formatBanDuration(wait)+" 后再试")
 		return
 	}
 
 	var req loginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "username and password are required")
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "username、password、captcha_id 和 captcha_code 为必填项")
+		return
+	}
+	if !h.captchaStore.Verify(req.CaptchaID, req.CaptchaCode) {
+		h.rateLimiter.RecordFailure(ip)
+		_ = db.InsertAuditLog(c.Request.Context(), h.database, req.Username, "login_failed", "user", req.Username, "captcha invalid", ip)
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "验证码不正确或已过期")
 		return
 	}
 
@@ -120,28 +140,32 @@ func (h *AuthHandler) login(c *gin.Context) {
 	if err != nil && h.allowPlaintextPassword {
 		password = req.Password
 	} else if err != nil {
+		h.rateLimiter.RecordFailure(ip)
 		_ = db.InsertAuditLog(c.Request.Context(), h.database, req.Username, "login_failed", "user", req.Username, "SM2 password decrypt failed", ip)
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "invalid encrypted password")
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "加密密码不正确")
 		return
 	}
 
 	user, err := db.FindUserByUsername(c.Request.Context(), h.database, req.Username)
 	if err != nil {
+		h.rateLimiter.RecordFailure(ip)
 		_ = db.InsertAuditLog(c.Request.Context(), h.database, req.Username, "login_failed", "user", req.Username, "user not found", ip)
-		Fail(c, http.StatusUnauthorized, CodeUnauthorized, "invalid username or password")
+		Fail(c, http.StatusUnauthorized, CodeUnauthorized, "用户名或密码不正确")
 		return
 	}
 	if !auth.CheckPassword(password, user.PasswordHash) {
+		h.rateLimiter.RecordFailure(ip)
 		_ = db.InsertAuditLog(c.Request.Context(), h.database, user.Username, "login_failed", "user", req.Username, "password mismatch", ip)
-		Fail(c, http.StatusUnauthorized, CodeUnauthorized, "invalid username or password")
+		Fail(c, http.StatusUnauthorized, CodeUnauthorized, "用户名或密码不正确")
 		return
 	}
 
 	tokens, err := h.jwtService.GeneratePair(user)
 	if err != nil {
-		Fail(c, http.StatusInternalServerError, CodeInternalError, "generate token failed")
+		Fail(c, http.StatusInternalServerError, CodeInternalError, "生成令牌失败")
 		return
 	}
+	h.rateLimiter.RecordSuccess(ip)
 	_ = db.InsertAuditLog(c.Request.Context(), h.database, user.Username, "login", "user", req.Username, "login success", ip)
 	OK(c, tokens)
 }
@@ -149,26 +173,26 @@ func (h *AuthHandler) login(c *gin.Context) {
 func (h *AuthHandler) refresh(c *gin.Context) {
 	var req refreshRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "refresh_token is required")
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "refresh_token 为必填项")
 		return
 	}
 	claims, err := h.jwtService.ParseRefreshToken(req.RefreshToken)
 	if err != nil {
-		Fail(c, http.StatusUnauthorized, CodeUnauthorized, "invalid or expired refresh token")
+		Fail(c, http.StatusUnauthorized, CodeUnauthorized, "刷新令牌无效或已过期")
 		return
 	}
 	user, err := db.FindUserByUsername(c.Request.Context(), h.database, claims.Username)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
-			Fail(c, http.StatusUnauthorized, CodeUnauthorized, "user no longer exists")
+			Fail(c, http.StatusUnauthorized, CodeUnauthorized, "用户不存在")
 			return
 		}
-		Fail(c, http.StatusInternalServerError, CodeInternalError, "load user failed")
+		Fail(c, http.StatusInternalServerError, CodeInternalError, "加载用户失败")
 		return
 	}
 	tokens, err := h.jwtService.GeneratePair(user)
 	if err != nil {
-		Fail(c, http.StatusInternalServerError, CodeInternalError, "generate token failed")
+		Fail(c, http.StatusInternalServerError, CodeInternalError, "生成令牌失败")
 		return
 	}
 	_ = db.InsertAuditLog(c.Request.Context(), h.database, user.Username, "token_refresh", "user", user.Username, "refresh token success", c.ClientIP())
@@ -178,7 +202,7 @@ func (h *AuthHandler) refresh(c *gin.Context) {
 func (h *AuthHandler) me(c *gin.Context) {
 	claims, ok := c.MustGet(authClaimsKey).(*auth.Claims)
 	if !ok {
-		Fail(c, http.StatusUnauthorized, CodeUnauthorized, "invalid token claims")
+		Fail(c, http.StatusUnauthorized, CodeUnauthorized, "访问令牌信息不正确")
 		return
 	}
 	OK(c, model.User{

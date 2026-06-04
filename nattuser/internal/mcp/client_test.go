@@ -70,6 +70,50 @@ func TestClientMCPGetsNetworkStatus(t *testing.T) {
 	}
 }
 
+func TestClientMCPAuditsEveryToolCallAndSanitizesParams(t *testing.T) {
+	router, database := setupClientMCPRouter(t)
+	defer database.Close()
+
+	rec := callClientMCP(t, router, "client-mcp-token", "client.list_servers", map[string]any{
+		"page_size":     10,
+		"client_secret": "must-not-leak",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rec = callClientMCP(t, router, "client-mcp-token", "client.unknown_tool", map[string]any{
+		"access_token": "also-secret",
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unknown status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	logs, total, err := db.ListAuditLogs(context.Background(), database, 20, 0)
+	if err != nil {
+		t.Fatalf("list audit logs: %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("audit total=%d want=2 logs=%+v", total, logs)
+	}
+	if !hasAuditAction(logs, "mcp_tool_call") {
+		t.Fatalf("missing mcp_tool_call audit: %+v", logs)
+	}
+	for _, item := range logs {
+		if item.Action != "mcp_tool_call" {
+			continue
+		}
+		if item.TargetType != "mcp_tool" || item.TargetID == "" {
+			t.Fatalf("unexpected mcp audit target: %+v", item)
+		}
+		if bytes.Contains([]byte(item.Content), []byte("must-not-leak")) || bytes.Contains([]byte(item.Content), []byte("also-secret")) {
+			t.Fatalf("mcp audit leaked secret content: %+v", item)
+		}
+		if !bytes.Contains([]byte(item.Content), []byte("[已脱敏]")) {
+			t.Fatalf("mcp audit did not include sanitized marker: %+v", item)
+		}
+	}
+}
+
 func TestClientMCPConnectsDisconnectsAndWritesAuditLogs(t *testing.T) {
 	router, database := setupClientMCPRouter(t)
 	defer database.Close()
@@ -106,10 +150,10 @@ func TestClientMCPConnectsDisconnectsAndWritesAuditLogs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list audit logs: %v", err)
 	}
-	if total != 2 {
-		t.Fatalf("audit total=%d want=2 logs=%+v", total, logs)
+	if total != 4 {
+		t.Fatalf("audit total=%d want=4 logs=%+v", total, logs)
 	}
-	for _, want := range []string{"mcp_server_connect", "mcp_server_disconnect"} {
+	for _, want := range []string{"mcp_tool_call", "mcp_server_connect", "mcp_server_disconnect"} {
 		if !hasAuditAction(logs, want) {
 			t.Fatalf("missing audit action %s in %+v", want, logs)
 		}

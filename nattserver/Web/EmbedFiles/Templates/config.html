@@ -9,7 +9,11 @@
     <style>
         body { min-height: auto; padding: 22px 24px; }
         .config-list { display: grid; gap: 10px; }
-        .config-row { display: grid; grid-template-columns: 240px 1fr auto; gap: 8px; align-items: center; }
+        .config-row { display: grid; grid-template-columns: 260px minmax(180px, 1fr) auto; gap: 8px; align-items: center; }
+        .readonly-row { grid-template-columns: 260px minmax(180px, 1fr); }
+        .readonly-value { min-height: 38px; display: flex; align-items: center; border: 1px solid #d8e0ea; border-radius: 6px; padding: 8px 10px; color: #475569; background: #f8fafc; word-break: break-all; }
+        .config-section { margin-top: 16px; }
+        .config-section h4 { margin: 0 0 12px; font-size: 14px; color: #475569; }
     </style>
 </head>
 <body>
@@ -19,11 +23,50 @@
 <script src="/static/js/app.js"></script>
 <script>
 if (NATT.requireAuth()) {
-    NATT.request("GET", "/config").then(function (d) {
-        var rows = (d.editable_keys || []).map(function (x) {
-            return '<div class="config-row"><code>' + NATT.escapeHtml(x.key) + '</code><input class="layui-input" data-key="' + NATT.escapeHtml(x.key) + '" placeholder="新值"><button class="layui-btn" type="button" data-save="' + NATT.escapeHtml(x.key) + '">保存</button></div>';
+    function flattenConfig(prefix, value, rows) {
+        if (value && typeof value === "object" && !Array.isArray(value)) {
+            Object.keys(value).sort().forEach(function (key) {
+                flattenConfig(prefix ? prefix + "." + key : key, value[key], rows);
+            });
+            return rows;
+        }
+        rows.push({ key: prefix, value: value });
+        return rows;
+    }
+    function renderReadonlyConfig(current) {
+        var rows = flattenConfig("", current || {}, []).map(function (x) {
+            return '<div class="config-row readonly-row"><code>' + NATT.escapeHtml(x.key) +
+                '</code><div class="readonly-value">' + NATT.escapeHtml(String(x.value == null ? "" : x.value)) + '</div></div>';
         }).join("");
-        $("#content").html('<div class="panel"><h3>配置</h3><div class="config-list">' + rows + '</div></div>');
+        return rows || '<div class="empty">暂无配置</div>';
+    }
+    function currentValue(current, key) {
+        var value = current || {};
+        String(key || "").split(".").forEach(function (part) {
+            if (value && typeof value === "object" && Object.prototype.hasOwnProperty.call(value, part)) {
+                value = value[part];
+            } else {
+                value = "";
+            }
+        });
+        return value == null ? "" : String(value);
+    }
+    function renderEditableConfig(keys, current) {
+        var rows = (keys || []).filter(function (x) { return x.hot_reload === true; }).map(function (x) {
+            var placeholder = "当前值:" + currentValue(current, x.key);
+            return '<div class="config-row"><code>' + NATT.escapeHtml(x.key) +
+                '</code><input class="layui-input" data-key="' + NATT.escapeHtml(x.key) +
+                '" placeholder="' + NATT.escapeHtml(placeholder) + '"><button class="layui-btn" type="button" data-save="' + NATT.escapeHtml(x.key) + '">保存</button></div>';
+        }).join("");
+        return rows || '<div class="empty">暂无可热更新配置</div>';
+    }
+    NATT.request("GET", "/config").then(function (d) {
+        $("#content").html(
+            '<div class="panel config-section"><h3>配置</h3>' +
+            '<div class="config-section"><h4>可热更新配置</h4><div class="config-list">' + renderEditableConfig(d.editable_keys || [], d.current || {}) + '</div></div>' +
+            '<div class="config-section"><h4>当前配置</h4><div class="config-list">' + renderReadonlyConfig(d.current || {}) + '</div></div>' +
+            '</div>'
+        );
     }).fail(NATT.showError);
     $("#content").on("click", "button[data-save]", function () {
         var k = $(this).data("save"), v = $('input[data-key="' + k + '"]').val();

@@ -23,20 +23,22 @@ func TestServerConnectionManagementFlow(t *testing.T) {
 	router, database, tokens := setupAuthenticatedClientRouter(t)
 	defer database.Close()
 
-	req := httptest.NewRequest(http.MethodGet, "/api/client/v1/servers", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/client/v1/tunnel-connections", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized list status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
-	createResp := authorizedJSON(t, router, http.MethodPost, "/api/client/v1/servers", tokens.AccessToken, map[string]any{
+	createResp := authorizedJSON(t, router, http.MethodPost, "/api/client/v1/tunnel-connections", tokens.AccessToken, map[string]any{
 		"name":          "public-server",
 		"server_host":   "example.com",
 		"server_port":   7000,
 		"data_port":     7001,
 		"use_tls":       true,
 		"client_secret": "natt_test_secret",
+		"local_host":    "127.0.0.1",
+		"local_port":    8080,
 		"auto_start":    true,
 		"remark":        "prod",
 	})
@@ -49,20 +51,39 @@ func TestServerConnectionManagementFlow(t *testing.T) {
 		t.Fatal("response must not expose client_secret")
 	}
 
-	listResp := authorizedJSON(t, router, http.MethodGet, "/api/client/v1/servers?page=1&page_size=10", tokens.AccessToken, nil)
-	var page PageResponse
-	decodeResponseData(t, listResp, &page)
-	if page.Total != 1 {
-		t.Fatalf("server connection total=%d want=1", page.Total)
+	listResp := authorizedJSON(t, router, http.MethodGet, "/api/client/v1/tunnel-connections?page=1&page_size=10", tokens.AccessToken, nil)
+	var listData struct {
+		Items []struct {
+			ID           int64  `json:"id"`
+			ServerHost   string `json:"server_host"`
+			ServerPort   int    `json:"server_port"`
+			DataPort     int    `json:"data_port"`
+			RemotePort   int    `json:"remote_port"`
+			ClientSecret string `json:"client_secret"`
+		} `json:"items"`
+		Total int64 `json:"total"`
+	}
+	decodeResponseData(t, listResp, &listData)
+	if listData.Total != 1 {
+		t.Fatalf("server connection total=%d want=1", listData.Total)
+	}
+	if len(listData.Items) != 1 {
+		t.Fatalf("server connection items=%d want=1", len(listData.Items))
+	}
+	item := listData.Items[0]
+	if item.ServerHost != "example.com" || item.ServerPort != 7000 || item.DataPort != 7001 || item.RemotePort != 0 || item.ClientSecret != "natt_test_secret" {
+		t.Fatalf("list did not expose expected connection display fields: %+v", item)
 	}
 
-	updateResp := authorizedJSON(t, router, http.MethodPut, "/api/client/v1/servers/1", tokens.AccessToken, map[string]any{
+	updateResp := authorizedJSON(t, router, http.MethodPut, "/api/client/v1/tunnel-connections/1", tokens.AccessToken, map[string]any{
 		"name":          "public-server-renamed",
 		"server_host":   "192.0.2.10",
 		"server_port":   7100,
 		"data_port":     7101,
 		"use_tls":       false,
 		"client_secret": "natt_test_secret_2",
+		"local_host":    "127.0.0.1",
+		"local_port":    9090,
 		"auto_start":    false,
 		"remark":        "updated",
 	})
@@ -72,21 +93,21 @@ func TestServerConnectionManagementFlow(t *testing.T) {
 		t.Fatalf("unexpected updated server connection: %+v", updated)
 	}
 
-	startResp := authorizedJSON(t, router, http.MethodPost, "/api/client/v1/servers/1/start", tokens.AccessToken, nil)
+	startResp := authorizedJSON(t, router, http.MethodPost, "/api/client/v1/tunnel-connections/1/start", tokens.AccessToken, nil)
 	var connected model.ServerConnection
 	decodeResponseData(t, startResp, &connected)
 	if connected.Status != model.ServerConnectionStatusConnected {
 		t.Fatalf("server connection status=%s want connected", connected.Status)
 	}
 
-	stopResp := authorizedJSON(t, router, http.MethodPost, "/api/client/v1/servers/1/stop", tokens.AccessToken, nil)
+	stopResp := authorizedJSON(t, router, http.MethodPost, "/api/client/v1/tunnel-connections/1/stop", tokens.AccessToken, nil)
 	var stopped model.ServerConnection
 	decodeResponseData(t, stopResp, &stopped)
 	if stopped.Status != model.ServerConnectionStatusStopped {
 		t.Fatalf("server connection status=%s want stopped", stopped.Status)
 	}
 
-	deleteResp := authorizedJSON(t, router, http.MethodDelete, "/api/client/v1/servers/1", tokens.AccessToken, nil)
+	deleteResp := authorizedJSON(t, router, http.MethodDelete, "/api/client/v1/tunnel-connections/1", tokens.AccessToken, nil)
 	var deleted model.ServerConnection
 	decodeResponseData(t, deleteResp, &deleted)
 	if deleted.ID != created.ID {
@@ -99,9 +120,11 @@ func TestServerConnectionCreateUsesDefaultsAndRejectsBadPorts(t *testing.T) {
 	router, database, tokens := setupAuthenticatedClientRouter(t)
 	defer database.Close()
 
-	createResp := authorizedJSON(t, router, http.MethodPost, "/api/client/v1/servers", tokens.AccessToken, map[string]any{
+	createResp := authorizedJSON(t, router, http.MethodPost, "/api/client/v1/tunnel-connections", tokens.AccessToken, map[string]any{
 		"name":          "defaulted",
 		"client_secret": "natt_default_secret",
+		"local_host":    "127.0.0.1",
+		"local_port":    8080,
 	})
 	var created model.ServerConnection
 	decodeResponseData(t, createResp, &created)
@@ -109,12 +132,113 @@ func TestServerConnectionCreateUsesDefaultsAndRejectsBadPorts(t *testing.T) {
 		t.Fatalf("defaults were not applied: %+v", created)
 	}
 
-	resp := authorizedJSONAllowStatus(t, router, http.MethodPost, "/api/client/v1/servers", tokens.AccessToken, map[string]any{
+	resp := authorizedJSONAllowStatus(t, router, http.MethodPost, "/api/client/v1/tunnel-connections", tokens.AccessToken, map[string]any{
 		"name":          "bad-port",
 		"server_port":   70000,
 		"client_secret": "natt_default_secret",
+		"local_host":    "127.0.0.1",
+		"local_port":    8080,
 	}, http.StatusBadRequest)
 	assertResponseCode(t, resp, CodeBadRequest)
+}
+
+func TestServerConnectionCreateReturnsFieldLevelValidationMessages(t *testing.T) {
+	router, database, tokens := setupAuthenticatedClientRouter(t)
+	defer database.Close()
+
+	base := map[string]any{
+		"name":          "validation-target",
+		"server_host":   "127.0.0.1",
+		"server_port":   7000,
+		"data_port":     7001,
+		"use_tls":       false,
+		"client_secret": "natt_validation_secret",
+		"local_host":    "127.0.0.1",
+		"local_port":    8080,
+	}
+	cases := []struct {
+		name       string
+		mutate     func(map[string]any)
+		wantStatus int
+		want       string
+	}{
+		{
+			name: "missing name",
+			mutate: func(body map[string]any) {
+				delete(body, "name")
+			},
+			wantStatus: http.StatusBadRequest,
+			want:       "name 为必填项",
+		},
+		{
+			name: "missing client secret",
+			mutate: func(body map[string]any) {
+				delete(body, "client_secret")
+			},
+			wantStatus: http.StatusBadRequest,
+			want:       "client_secret 为必填项",
+		},
+		{
+			name: "missing local host",
+			mutate: func(body map[string]any) {
+				delete(body, "local_host")
+			},
+			wantStatus: http.StatusBadRequest,
+			want:       "local_host 为必填项",
+		},
+		{
+			name: "server port string",
+			mutate: func(body map[string]any) {
+				body["server_port"] = "abc"
+			},
+			wantStatus: http.StatusBadRequest,
+			want:       "server_port 必须是数字",
+		},
+		{
+			name: "use tls string",
+			mutate: func(body map[string]any) {
+				body["use_tls"] = "yes"
+			},
+			wantStatus: http.StatusBadRequest,
+			want:       "use_tls 必须是 true 或 false",
+		},
+		{
+			name: "local port too large",
+			mutate: func(body map[string]any) {
+				body["local_port"] = 70000
+			},
+			wantStatus: http.StatusBadRequest,
+			want:       "local_port 必须在 1 到 65535 之间",
+		},
+		{
+			name: "local port zero",
+			mutate: func(body map[string]any) {
+				body["local_port"] = 0
+			},
+			wantStatus: http.StatusBadRequest,
+			want:       "local_port 必须在 1 到 65535 之间",
+		},
+		{
+			name: "local port negative",
+			mutate: func(body map[string]any) {
+				body["local_port"] = -1
+			},
+			wantStatus: http.StatusBadRequest,
+			want:       "local_port 必须在 1 到 65535 之间",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := cloneMap(base)
+			tc.mutate(body)
+			resp := authorizedJSONAllowStatus(t, router, http.MethodPost, "/api/client/v1/tunnel-connections", tokens.AccessToken, body, tc.wantStatus)
+			assertResponseMessageContains(t, resp, tc.want)
+			if strings.Contains(resp.Body.String(), "invalid server connection parameters") {
+				t.Fatalf("response still contains vague validation message: %s", resp.Body.String())
+			}
+		})
+	}
 }
 
 func setupAuthenticatedClientRouter(t *testing.T) (*gin.Engine, *sql.DB, auth.TokenPair) {
@@ -133,6 +257,12 @@ func setupAuthenticatedClientRouter(t *testing.T) (*gin.Engine, *sql.DB, auth.To
 	database, err := db.Open(context.Background(), cfg.Database.Path, nil)
 	if err != nil {
 		t.Fatalf("open database: %v", err)
+	}
+	if err := db.UpsertSetting(context.Background(), database, "mcp.enabled", "true"); err != nil {
+		t.Fatalf("enable mcp setting: %v", err)
+	}
+	if err := db.UpsertSetting(context.Background(), database, "mcp.access_token", cfg.MCP.AccessToken); err != nil {
+		t.Fatalf("set mcp token: %v", err)
 	}
 	router := NewRouter(cfg, database, nil)
 	publicKey := fetchPublicKey(t, router, "/api/client/v1/auth/sm2-public-key")
@@ -210,4 +340,25 @@ func assertResponseCode(t *testing.T, rec *httptest.ResponseRecorder, want int) 
 	if resp.Code != want {
 		t.Fatalf("response code=%d want=%d body=%s", resp.Code, want, rec.Body.String())
 	}
+}
+
+func assertResponseMessageContains(t *testing.T, rec *httptest.ResponseRecorder, want string) {
+	t.Helper()
+	var resp struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response message: %v", err)
+	}
+	if !strings.Contains(resp.Message, want) {
+		t.Fatalf("response message=%q want contains %q body=%s", resp.Message, want, rec.Body.String())
+	}
+}
+
+func cloneMap(src map[string]any) map[string]any {
+	dst := make(map[string]any, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
 }

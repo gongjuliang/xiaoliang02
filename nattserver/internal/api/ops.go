@@ -63,7 +63,7 @@ func (h *OpsHandler) dashboard(c *gin.Context) {
 func (h *OpsHandler) auditLogs(c *gin.Context) {
 	var page PageRequest
 	if err := c.ShouldBindQuery(&page); err != nil {
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "invalid pagination parameters")
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "分页参数不正确")
 		return
 	}
 	page.Normalize()
@@ -125,12 +125,11 @@ func (h *OpsHandler) getConfig(c *gin.Context) {
 
 func (h *OpsHandler) updateConfig(c *gin.Context) {
 	var req updateConfigRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "settings is required")
+	if !bindJSONOrFail(c, &req, "settings 为必填项") {
 		return
 	}
 	if len(req.Settings) == 0 {
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "settings cannot be empty")
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "settings 不能为空")
 		return
 	}
 
@@ -159,7 +158,7 @@ func (h *OpsHandler) applyConfigSetting(key string, value string) (configUpdateR
 	case "log.level":
 		level := strings.ToLower(value)
 		if level != "debug" && level != "info" && level != "error" {
-			return configUpdateResult{}, fmt.Errorf("log.level must be debug, info, or error")
+			return configUpdateResult{}, fmt.Errorf("log.level 必须是 debug、info 或 error")
 		}
 		h.cfg.Log.Level = level
 		if h.log != nil {
@@ -172,7 +171,7 @@ func (h *OpsHandler) applyConfigSetting(key string, value string) (configUpdateR
 			return configUpdateResult{}, err
 		}
 		if port > h.cfg.Tunnel.RemotePortMax {
-			return configUpdateResult{}, fmt.Errorf("tunnel.remote_port_min cannot be greater than tunnel.remote_port_max")
+			return configUpdateResult{}, fmt.Errorf("tunnel.remote_port_min 不能大于 tunnel.remote_port_max")
 		}
 		h.cfg.Tunnel.RemotePortMin = port
 		return configUpdateResult{Key: key, Value: strconv.Itoa(port), HotReloaded: true, RestartRequired: false}, nil
@@ -182,7 +181,7 @@ func (h *OpsHandler) applyConfigSetting(key string, value string) (configUpdateR
 			return configUpdateResult{}, err
 		}
 		if port < h.cfg.Tunnel.RemotePortMin {
-			return configUpdateResult{}, fmt.Errorf("tunnel.remote_port_max cannot be less than tunnel.remote_port_min")
+			return configUpdateResult{}, fmt.Errorf("tunnel.remote_port_max 不能小于 tunnel.remote_port_min")
 		}
 		h.cfg.Tunnel.RemotePortMax = port
 		return configUpdateResult{Key: key, Value: strconv.Itoa(port), HotReloaded: true, RestartRequired: false}, nil
@@ -190,12 +189,9 @@ func (h *OpsHandler) applyConfigSetting(key string, value string) (configUpdateR
 		"protocol.control_host", "protocol.control_port", "protocol.data_host", "protocol.data_port",
 		"protocol.tls.enabled", "protocol.tls.cert_file", "protocol.tls.key_file",
 		"auth.access_token_ttl_minutes", "auth.refresh_token_ttl_minutes", "auth.login_rate_limit_per_minute":
-		if err := validateRestartSetting(key, value); err != nil {
-			return configUpdateResult{}, err
-		}
-		return configUpdateResult{Key: key, Value: value, HotReloaded: false, RestartRequired: true}, nil
+		return configUpdateResult{}, fmt.Errorf("该配置不支持热更新，请修改配置文件后重启服务")
 	default:
-		return configUpdateResult{}, fmt.Errorf("unsupported config key: %s", key)
+		return configUpdateResult{}, fmt.Errorf("不支持的配置项：%s", key)
 	}
 }
 
@@ -211,25 +207,13 @@ func editableConfigKeys() []gin.H {
 		{"key": "log.level", "hot_reload": true},
 		{"key": "tunnel.remote_port_min", "hot_reload": true},
 		{"key": "tunnel.remote_port_max", "hot_reload": true},
-		{"key": "http.host", "hot_reload": false},
-		{"key": "http.port", "hot_reload": false},
-		{"key": "protocol.control_host", "hot_reload": false},
-		{"key": "protocol.control_port", "hot_reload": false},
-		{"key": "protocol.data_host", "hot_reload": false},
-		{"key": "protocol.data_port", "hot_reload": false},
-		{"key": "protocol.tls.enabled", "hot_reload": false},
-		{"key": "protocol.tls.cert_file", "hot_reload": false},
-		{"key": "protocol.tls.key_file", "hot_reload": false},
-		{"key": "auth.access_token_ttl_minutes", "hot_reload": false},
-		{"key": "auth.refresh_token_ttl_minutes", "hot_reload": false},
-		{"key": "auth.login_rate_limit_per_minute", "hot_reload": false},
 	}
 }
 
 func parsePortValue(key string, value string) (int, error) {
 	port, err := strconv.Atoi(value)
 	if err != nil || port < 1 || port > 65535 {
-		return 0, fmt.Errorf("%s must be between 1 and 65535", key)
+		return 0, fmt.Errorf("%s 必须在 1 到 65535 之间", key)
 	}
 	return port, nil
 }
@@ -278,8 +262,7 @@ func (h *OpsHandler) getMCPConfig(c *gin.Context) {
 
 func (h *OpsHandler) updateMCPConfig(c *gin.Context) {
 	var req mcpConfigRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "invalid mcp config")
+	if !bindJSONOrFail(c, &req, "MCP 配置参数不正确") {
 		return
 	}
 	token := strings.TrimSpace(req.AccessToken)
@@ -292,7 +275,7 @@ func (h *OpsHandler) updateMCPConfig(c *gin.Context) {
 		token = strings.TrimSpace(existing)
 	}
 	if req.Enabled && token == "" {
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "access_token is required when mcp is enabled")
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "启用 MCP 时 access_token 为必填项")
 		return
 	}
 	if err := db.UpsertSetting(c.Request.Context(), h.database, "mcp.enabled", strconv.FormatBool(req.Enabled)); err != nil {
@@ -312,7 +295,7 @@ func (h *OpsHandler) updateMCPConfig(c *gin.Context) {
 func (h *OpsHandler) rotateMCPToken(c *gin.Context) {
 	token, err := auth.GenerateClientSecret()
 	if err != nil {
-		Fail(c, http.StatusInternalServerError, CodeInternalError, "generate mcp token failed")
+		Fail(c, http.StatusInternalServerError, CodeInternalError, "生成 MCP 令牌失败")
 		return
 	}
 	if err := db.UpsertSetting(c.Request.Context(), h.database, "mcp.access_token", token); err != nil {

@@ -28,6 +28,7 @@ const (
 	CodeOK                      = "ok"
 	CodeBadRequest              = "bad_request"
 	CodeUnauthorized            = "unauthorized"
+	CodeConflict                = "conflict"
 	CodeUnsupportedType         = "unsupported_type"
 	CodeInternalError           = "internal_error"
 	CodeLocalServiceUnavailable = "local_service_unavailable"
@@ -62,6 +63,7 @@ type AuthResponse struct {
 	Success                  bool   `json:"success"`
 	ClientID                 int64  `json:"client_id,omitempty"`
 	TunnelID                 int64  `json:"tunnel_id,omitempty"`
+	RemotePort               int    `json:"remote_port,omitempty"`
 	ProtocolVersion          string `json:"protocol_version"`
 	HeartbeatIntervalSeconds int    `json:"heartbeat_interval_seconds"`
 	Message                  string `json:"message,omitempty"`

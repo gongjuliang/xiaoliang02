@@ -19,71 +19,73 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func TestClientManagementFlow(t *testing.T) {
+func TestTunnelKeyManagementFlow(t *testing.T) {
 	router, database, tokens := setupAuthenticatedServerRouter(t)
 	defer database.Close()
 
-	req := httptest.NewRequest(http.MethodGet, "/api/server/v1/clients", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/server/v1/tunnels", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized list status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
-	createResp := authorizedJSON(t, router, http.MethodPost, "/api/server/v1/clients", tokens.AccessToken, map[string]string{
-		"name":   "office-client",
-		"remark": "office lab",
+	createResp := authorizedJSON(t, router, http.MethodPost, "/api/server/v1/tunnels", tokens.AccessToken, map[string]any{
+		"name":        "office-tunnel",
+		"remote_port": 18080,
+		"remark":      "office lab",
 	})
-	var created clientSecretResponse
+	var created tunnelSecretResponse
 	decodeResponseData(t, createResp, &created)
-	if created.Client.ID == 0 || created.ClientSecret == "" {
+	if created.Tunnel.ID == 0 || created.Secret == "" {
 		t.Fatalf("unexpected create response: %+v", created)
 	}
-	if !strings.HasPrefix(created.ClientSecret, "natt_") {
-		t.Fatalf("unexpected client secret prefix: %s", created.ClientSecret)
+	if !strings.HasPrefix(created.Secret, "natt_") {
+		t.Fatalf("unexpected tunnel secret prefix: %s", created.Secret)
 	}
 	if strings.Contains(createResp.Body.String(), "secret_hash") {
 		t.Fatal("response must not expose secret_hash")
 	}
 
-	listResp := authorizedJSON(t, router, http.MethodGet, "/api/server/v1/clients?page=1&page_size=10", tokens.AccessToken, nil)
+	listResp := authorizedJSON(t, router, http.MethodGet, "/api/server/v1/tunnels?page=1&page_size=10", tokens.AccessToken, nil)
 	var page PageResponse
 	decodeResponseData(t, listResp, &page)
 	if page.Total != 1 {
-		t.Fatalf("client total=%d want=1", page.Total)
+		t.Fatalf("tunnel total=%d want=1", page.Total)
 	}
 
-	updateResp := authorizedJSON(t, router, http.MethodPut, "/api/server/v1/clients/1", tokens.AccessToken, map[string]string{
-		"name":   "office-client-renamed",
-		"remark": "updated",
+	updateResp := authorizedJSON(t, router, http.MethodPut, "/api/server/v1/tunnels/1", tokens.AccessToken, map[string]any{
+		"name":        "office-tunnel-renamed",
+		"remote_port": 18081,
+		"remark":      "updated",
 	})
-	var updated model.Client
+	var updated model.Tunnel
 	decodeResponseData(t, updateResp, &updated)
-	if updated.Name != "office-client-renamed" || updated.Remark != "updated" {
+	if updated.Name != "office-tunnel-renamed" || updated.Remark != "updated" || updated.RemotePort != 18081 {
 		t.Fatalf("unexpected update response: %+v", updated)
 	}
 
-	disableResp := authorizedJSON(t, router, http.MethodPost, "/api/server/v1/clients/1/disable", tokens.AccessToken, nil)
-	var disabled model.Client
+	disableResp := authorizedJSON(t, router, http.MethodPost, "/api/server/v1/tunnels/1/disable-key", tokens.AccessToken, nil)
+	var disabled model.TunnelKey
 	decodeResponseData(t, disableResp, &disabled)
-	if disabled.Status != model.ClientStatusDisabled {
-		t.Fatalf("client status=%s want disabled", disabled.Status)
+	if disabled.Status != model.TunnelKeyStatusDisabled {
+		t.Fatalf("tunnel key status=%s want disabled", disabled.Status)
 	}
 
-	enableResp := authorizedJSON(t, router, http.MethodPost, "/api/server/v1/clients/1/enable", tokens.AccessToken, nil)
-	var enabled model.Client
+	enableResp := authorizedJSON(t, router, http.MethodPost, "/api/server/v1/tunnels/1/enable-key", tokens.AccessToken, nil)
+	var enabled model.TunnelKey
 	decodeResponseData(t, enableResp, &enabled)
-	if enabled.Status != model.ClientStatusEnabled {
-		t.Fatalf("client status=%s want enabled", enabled.Status)
+	if enabled.Status != model.TunnelKeyStatusEnabled {
+		t.Fatalf("tunnel key status=%s want enabled", enabled.Status)
 	}
 
-	rotateResp := authorizedJSON(t, router, http.MethodPost, "/api/server/v1/clients/1/rotate-secret", tokens.AccessToken, nil)
-	var rotated clientSecretResponse
+	rotateResp := authorizedJSON(t, router, http.MethodPost, "/api/server/v1/tunnels/1/rotate-secret", tokens.AccessToken, nil)
+	var rotated tunnelSecretResponse
 	decodeResponseData(t, rotateResp, &rotated)
-	if rotated.ClientSecret == "" || rotated.ClientSecret == created.ClientSecret {
+	if rotated.Secret == "" || rotated.Secret == created.Secret {
 		t.Fatal("expected rotated secret to be present and different")
 	}
-	if rotated.Client.SecretHint == created.Client.SecretHint {
+	if rotated.Key.SecretHint == created.Key.SecretHint {
 		t.Fatal("expected secret hint to change after rotation")
 	}
 
@@ -110,6 +112,12 @@ func setupAuthenticatedServerRouterWithRuntime(t *testing.T, runtime Runtime) (*
 	database, err := db.Open(context.Background(), cfg.Database.Path, nil)
 	if err != nil {
 		t.Fatalf("open database: %v", err)
+	}
+	if err := db.UpsertSetting(context.Background(), database, "mcp.enabled", "true"); err != nil {
+		t.Fatalf("enable mcp setting: %v", err)
+	}
+	if err := db.UpsertSetting(context.Background(), database, "mcp.access_token", cfg.MCP.AccessToken); err != nil {
+		t.Fatalf("set mcp token: %v", err)
 	}
 	router := NewRouterWithRuntime(cfg, database, nil, runtime)
 	publicKey := fetchPublicKey(t, router, "/api/server/v1/auth/sm2-public-key")

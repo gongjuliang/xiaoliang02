@@ -51,6 +51,7 @@
 <script src="/static/js/app.js"></script>
 <script>
 if (NATT.requireAuth()) {
+    var activeViewKey = "natt_client_active_view";
     var titles = {
         dashboard: ["本机状态", "运行概览"],
         tunnels: ["隧道连接", "服务端秘钥到本地目标的绑定"],
@@ -59,20 +60,28 @@ if (NATT.requireAuth()) {
         audit: ["审计", "管理操作记录"]
     };
     function activate(btn) {
-        var view = btn.data("view");
+        if (!btn || !btn.length) btn = $('#nav [data-view="dashboard"]');
+        var view = btn.data("view") || "dashboard";
+        var src = btn.data("src") || "/dashboard.html";
         var title = titles[view] || ["控制台", ""];
         $("#nav button").removeClass("active");
         btn.addClass("active");
         $("#viewTitle").text(title[0]);
         $("#viewSubTitle").text(title[1]);
-        $("#mainFrame").attr("src", btn.data("src"));
+        sessionStorage.setItem(activeViewKey, view);
+        $("#mainFrame").attr("src", src);
     }
     $("#nav").on("click", "button[data-src]", function () { activate($(this)); });
     $("#refreshBtn").on("click", function () {
         document.getElementById("mainFrame").contentWindow.location.reload();
     });
-    $("#logoutBtn").on("click", NATT.logout);
-    activate($('#nav [data-view="dashboard"]'));
+    $("#logoutBtn").on("click", function () {
+        sessionStorage.removeItem(activeViewKey);
+        NATT.logout();
+    });
+    var savedView = sessionStorage.getItem(activeViewKey) || "dashboard";
+    var savedBtn = $('#nav [data-view="' + savedView + '"]');
+    activate(savedBtn.length ? savedBtn : $('#nav [data-view="dashboard"]'));
 }
 </script>
 </body>

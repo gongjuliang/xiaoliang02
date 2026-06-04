@@ -9,6 +9,7 @@ import (
 	"net"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -253,7 +254,7 @@ func (m *Manager) connectAndServe(ctx context.Context, connection model.ServerCo
 	_ = conn.SetReadDeadline(time.Time{})
 	if authRespMessage.Type == protocol.TypeError {
 		protocolErr, _ := protocol.DecodePayload[protocol.ProtocolError](authRespMessage)
-		return fmt.Errorf("auth rejected: %s %s", protocolErr.Code, protocolErr.Message)
+		return fmt.Errorf("%s", localizeProtocolError(protocolErr))
 	}
 	if authRespMessage.Type != protocol.TypeAuthResponse {
 		return fmt.Errorf("unexpected auth response type: %s", authRespMessage.Type)
@@ -266,9 +267,9 @@ func (m *Manager) connectAndServe(ctx context.Context, connection model.ServerCo
 		if authResp.Message == "" {
 			authResp.Message = "authentication failed"
 		}
-		return fmt.Errorf("auth rejected: %s", authResp.Message)
+		return fmt.Errorf("%s", localizeProtocolMessage(authResp.Message))
 	}
-	if err := db.MarkServerConnectionConnected(ctx, m.database, connection.ID); err != nil {
+	if err := db.MarkServerConnectionConnectedWithRemotePort(ctx, m.database, connection.ID, authResp.RemotePort); err != nil {
 		return err
 	}
 	m.logInfo("control connected server_connection_id=%d remote=%s", connection.ID, conn.RemoteAddr().String())
@@ -393,10 +394,42 @@ func (m *Manager) handleMessage(ctx context.Context, connectionID int64, writer 
 		return nil
 	case protocol.TypeError:
 		protocolErr, _ := protocol.DecodePayload[protocol.ProtocolError](message)
-		return fmt.Errorf("control error: %s %s", protocolErr.Code, protocolErr.Message)
+		return fmt.Errorf("%s", localizeProtocolError(protocolErr))
 	default:
 		m.logInfo("ignored unsupported control message server_connection_id=%d type=%s", connectionID, message.Type)
 		return nil
+	}
+}
+
+func localizeProtocolError(err protocol.ProtocolError) string {
+	if strings.TrimSpace(err.Message) != "" {
+		return localizeProtocolMessage(err.Message)
+	}
+	switch err.Code {
+	case protocol.CodeUnauthorized:
+		return "秘钥错误"
+	case protocol.CodeConflict:
+		return "该连接正在占用，不得连接"
+	case protocol.CodeBadRequest:
+		return "请求参数不正确"
+	default:
+		return "服务端返回错误"
+	}
+}
+
+func localizeProtocolMessage(message string) string {
+	trimmed := strings.TrimSpace(message)
+	switch {
+	case trimmed == "":
+		return "服务端返回错误"
+	case strings.Contains(strings.ToLower(trimmed), "unauthorized"):
+		return "秘钥错误"
+	case strings.Contains(trimmed, "秘钥错误"):
+		return "秘钥错误"
+	case strings.Contains(trimmed, "该连接正在占用"):
+		return "该连接正在占用，不得连接"
+	default:
+		return trimmed
 	}
 }
 

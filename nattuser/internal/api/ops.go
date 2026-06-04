@@ -41,10 +41,10 @@ type localTunnelStatus struct {
 
 type localTunnelRequest struct {
 	Name               string `json:"name" binding:"required"`
-	ServerConnectionID int64  `json:"server_connection_id" binding:"required"`
-	ServerTunnelID     int64  `json:"server_tunnel_id" binding:"required"`
+	ServerConnectionID int64  `json:"server_connection_id"`
+	ServerTunnelID     int64  `json:"server_tunnel_id"`
 	LocalHost          string `json:"local_host" binding:"required"`
-	LocalPort          int    `json:"local_port" binding:"required"`
+	LocalPort          int    `json:"local_port"`
 	Enabled            *bool  `json:"enabled"`
 	Remark             string `json:"remark"`
 }
@@ -71,6 +71,10 @@ func NewOpsHandler(database *sql.DB, log *logger.Logger, cfg *config.Config) *Op
 
 func (h *OpsHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.GET("/status", h.status)
+	group.GET("/tunnels", h.localTunnels)
+	group.POST("/tunnels", h.createLocalTunnel)
+	group.PUT("/tunnels/:id", h.updateLocalTunnel)
+	group.DELETE("/tunnels/:id", h.deleteLocalTunnel)
 	group.GET("/audit-logs", h.auditLogs)
 	group.GET("/config", h.getConfig)
 	group.PUT("/config", h.updateConfig)
@@ -82,7 +86,7 @@ func (h *OpsHandler) RegisterRoutes(group *gin.RouterGroup) {
 func (h *OpsHandler) localTunnels(c *gin.Context) {
 	var page PageRequest
 	if err := c.ShouldBindQuery(&page); err != nil {
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "invalid pagination parameters")
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "分页参数不正确")
 		return
 	}
 	page.Normalize()
@@ -201,7 +205,7 @@ func (h *OpsHandler) status(c *gin.Context) {
 func (h *OpsHandler) auditLogs(c *gin.Context) {
 	var page PageRequest
 	if err := c.ShouldBindQuery(&page); err != nil {
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "invalid pagination parameters")
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "分页参数不正确")
 		return
 	}
 	page.Normalize()
@@ -254,12 +258,11 @@ func (h *OpsHandler) getConfig(c *gin.Context) {
 
 func (h *OpsHandler) updateConfig(c *gin.Context) {
 	var req updateConfigRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "settings is required")
+	if !bindJSONOrFail(c, &req, "settings 为必填项") {
 		return
 	}
 	if len(req.Settings) == 0 {
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "settings cannot be empty")
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "settings 不能为空")
 		return
 	}
 
@@ -288,7 +291,7 @@ func (h *OpsHandler) applyConfigSetting(key string, value string) (configUpdateR
 	case "log.level":
 		level := strings.ToLower(value)
 		if level != "debug" && level != "info" && level != "error" {
-			return configUpdateResult{}, fmt.Errorf("log.level must be debug, info, or error")
+			return configUpdateResult{}, fmt.Errorf("log.level 必须是 debug、info 或 error")
 		}
 		h.cfg.Log.Level = level
 		if h.log != nil {
@@ -297,7 +300,7 @@ func (h *OpsHandler) applyConfigSetting(key string, value string) (configUpdateR
 		return configUpdateResult{Key: key, Value: level, HotReloaded: true, RestartRequired: false}, nil
 	case "server_defaults.server_host":
 		if value == "" {
-			return configUpdateResult{}, fmt.Errorf("server_defaults.server_host is required")
+			return configUpdateResult{}, fmt.Errorf("server_defaults.server_host 为必填项")
 		}
 		h.cfg.ServerDefaults.ServerHost = value
 		return configUpdateResult{Key: key, Value: value, HotReloaded: true, RestartRequired: false}, nil
@@ -318,18 +321,15 @@ func (h *OpsHandler) applyConfigSetting(key string, value string) (configUpdateR
 	case "server_defaults.use_tls":
 		parsed, err := strconv.ParseBool(value)
 		if err != nil {
-			return configUpdateResult{}, fmt.Errorf("server_defaults.use_tls must be true or false")
+			return configUpdateResult{}, fmt.Errorf("server_defaults.use_tls 必须是 true 或 false")
 		}
 		h.cfg.ServerDefaults.UseTLS = parsed
 		return configUpdateResult{Key: key, Value: strconv.FormatBool(parsed), HotReloaded: true, RestartRequired: false}, nil
 	case "http.host", "http.port",
 		"auth.access_token_ttl_minutes", "auth.refresh_token_ttl_minutes", "auth.login_rate_limit_per_minute":
-		if err := validateRestartSetting(key, value); err != nil {
-			return configUpdateResult{}, err
-		}
-		return configUpdateResult{Key: key, Value: value, HotReloaded: false, RestartRequired: true}, nil
+		return configUpdateResult{}, fmt.Errorf("该配置不支持热更新，请修改配置文件后重启服务")
 	default:
-		return configUpdateResult{}, fmt.Errorf("unsupported config key: %s", key)
+		return configUpdateResult{}, fmt.Errorf("不支持的配置项：%s", key)
 	}
 }
 
@@ -341,8 +341,7 @@ func (h *OpsHandler) writeError(c *gin.Context, err error, fallback string) {
 }
 
 func (h *OpsHandler) bindAndValidateLocalTunnel(c *gin.Context, req *localTunnelRequest) bool {
-	if err := c.ShouldBindJSON(req); err != nil {
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "invalid local tunnel parameters")
+	if !bindJSONOrFail(c, req, "本地隧道参数不正确") {
 		return false
 	}
 	req.Name = strings.TrimSpace(req.Name)
@@ -350,15 +349,15 @@ func (h *OpsHandler) bindAndValidateLocalTunnel(c *gin.Context, req *localTunnel
 	req.Remark = strings.TrimSpace(req.Remark)
 	switch {
 	case req.Name == "":
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "name is required")
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "name 为必填项")
 	case req.ServerConnectionID <= 0:
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "server_connection_id is required")
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "server_connection_id 为必填项")
 	case req.ServerTunnelID <= 0:
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "server_tunnel_id is required")
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "server_tunnel_id 为必填项")
 	case req.LocalHost == "":
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "local_host is required")
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "local_host 为必填项")
 	case !validPort(req.LocalPort):
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "local_port must be between 1 and 65535")
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "local_port 必须在 1 到 65535 之间")
 	default:
 		return true
 	}
@@ -367,11 +366,11 @@ func (h *OpsHandler) bindAndValidateLocalTunnel(c *gin.Context, req *localTunnel
 
 func (h *OpsHandler) writeLocalTunnelDBError(c *gin.Context, err error, fallback string) {
 	if errors.Is(err, db.ErrNotFound) {
-		Fail(c, http.StatusNotFound, CodeNotFound, "resource not found")
+		Fail(c, http.StatusNotFound, CodeNotFound, "资源不存在")
 		return
 	}
 	if errors.Is(err, db.ErrConflict) {
-		Fail(c, http.StatusConflict, CodeConflict, "local tunnel conflict")
+		Fail(c, http.StatusConflict, CodeConflict, "本地隧道配置冲突")
 		return
 	}
 	h.writeError(c, err, fallback)
@@ -384,18 +383,13 @@ func editableConfigKeys() []gin.H {
 		{"key": "server_defaults.control_port", "hot_reload": true},
 		{"key": "server_defaults.data_port", "hot_reload": true},
 		{"key": "server_defaults.use_tls", "hot_reload": true},
-		{"key": "http.host", "hot_reload": false},
-		{"key": "http.port", "hot_reload": false},
-		{"key": "auth.access_token_ttl_minutes", "hot_reload": false},
-		{"key": "auth.refresh_token_ttl_minutes", "hot_reload": false},
-		{"key": "auth.login_rate_limit_per_minute", "hot_reload": false},
 	}
 }
 
 func parsePortValue(key string, value string) (int, error) {
 	port, err := strconv.Atoi(value)
 	if err != nil || port < 1 || port > 65535 {
-		return 0, fmt.Errorf("%s must be between 1 and 65535", key)
+		return 0, fmt.Errorf("%s 必须在 1 到 65535 之间", key)
 	}
 	return port, nil
 }
@@ -436,8 +430,7 @@ func (h *OpsHandler) getMCPConfig(c *gin.Context) {
 
 func (h *OpsHandler) updateMCPConfig(c *gin.Context) {
 	var req mcpConfigRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "invalid mcp config")
+	if !bindJSONOrFail(c, &req, "MCP 配置参数不正确") {
 		return
 	}
 	token := strings.TrimSpace(req.AccessToken)
@@ -450,7 +443,7 @@ func (h *OpsHandler) updateMCPConfig(c *gin.Context) {
 		token = strings.TrimSpace(existing)
 	}
 	if req.Enabled && token == "" {
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "access_token is required when mcp is enabled")
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "启用 MCP 时 access_token 为必填项")
 		return
 	}
 	if err := db.UpsertSetting(c.Request.Context(), h.database, "mcp.enabled", strconv.FormatBool(req.Enabled)); err != nil {
@@ -470,7 +463,7 @@ func (h *OpsHandler) updateMCPConfig(c *gin.Context) {
 func (h *OpsHandler) rotateMCPToken(c *gin.Context) {
 	token, err := auth.GenerateClientSecret()
 	if err != nil {
-		Fail(c, http.StatusInternalServerError, CodeInternalError, "generate mcp token failed")
+		Fail(c, http.StatusInternalServerError, CodeInternalError, "生成 MCP 令牌失败")
 		return
 	}
 	if err := db.UpsertSetting(c.Request.Context(), h.database, "mcp.access_token", token); err != nil {

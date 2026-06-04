@@ -25,6 +25,14 @@
             <span>密码</span>
             <input name="password" type="password" autocomplete="current-password">
         </label>
+        <label class="field">
+            <span>验证码</span>
+            <div class="captcha-row">
+                <input name="captcha_code" autocomplete="off" placeholder="请输入计算结果">
+                <button id="captchaRefresh" class="layui-btn layui-btn-primary" type="button">刷新</button>
+            </div>
+            <strong id="captchaQuestion" class="captcha-question">加载中...</strong>
+        </label>
         <button class="layui-btn primary full" type="submit">登录</button>
         <div id="loginError" class="form-error"></div>
     </form>

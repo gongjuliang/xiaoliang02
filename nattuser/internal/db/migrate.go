@@ -135,6 +135,45 @@ BEGIN
 END;
 `,
 	},
+	{
+		Version: 4,
+		Name:    "local_tunnel_bindings",
+		SQL: `
+CREATE TABLE IF NOT EXISTS local_tunnels (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	name TEXT NOT NULL,
+	server_connection_id INTEGER NOT NULL,
+	server_tunnel_id INTEGER NOT NULL,
+	local_host TEXT NOT NULL,
+	local_port INTEGER NOT NULL,
+	enabled INTEGER NOT NULL DEFAULT 1,
+	last_error TEXT,
+	remark TEXT,
+	created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+	updated_at DATETIME NOT NULL DEFAULT (datetime('now')),
+	FOREIGN KEY (server_connection_id) REFERENCES tunnel_connections(id) ON DELETE CASCADE,
+	UNIQUE(server_connection_id, server_tunnel_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_local_tunnels_server_connection_id ON local_tunnels(server_connection_id);
+CREATE INDEX IF NOT EXISTS idx_local_tunnels_server_tunnel_id ON local_tunnels(server_tunnel_id);
+
+CREATE TRIGGER IF NOT EXISTS trg_local_tunnels_updated_at
+AFTER UPDATE ON local_tunnels
+FOR EACH ROW
+WHEN NEW.updated_at = OLD.updated_at
+BEGIN
+	UPDATE local_tunnels SET updated_at = datetime('now') WHERE id = OLD.id;
+END;
+`,
+	},
+	{
+		Version: 5,
+		Name:    "server_remote_port_display",
+		SQL: `
+ALTER TABLE tunnel_connections ADD COLUMN remote_port INTEGER NOT NULL DEFAULT 0;
+`,
+	},
 }
 
 func Migrate(ctx context.Context, database *sql.DB, log *logger.Logger) error {

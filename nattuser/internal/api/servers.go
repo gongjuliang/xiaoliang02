@@ -31,9 +31,28 @@ type serverConnectionRequest struct {
 	UseTLS       *bool  `json:"use_tls"`
 	ClientSecret string `json:"client_secret" binding:"required"`
 	LocalHost    string `json:"local_host" binding:"required"`
-	LocalPort    int    `json:"local_port" binding:"required"`
+	LocalPort    int    `json:"local_port"`
 	AutoStart    bool   `json:"auto_start"`
 	Remark       string `json:"remark"`
+}
+
+type serverConnectionResponse struct {
+	ID           int64                        `json:"id"`
+	Name         string                       `json:"name"`
+	ServerHost   string                       `json:"server_host"`
+	ServerPort   int                          `json:"server_port"`
+	DataPort     int                          `json:"data_port"`
+	RemotePort   int                          `json:"remote_port"`
+	UseTLS       bool                         `json:"use_tls"`
+	ClientSecret string                       `json:"client_secret"`
+	LocalHost    string                       `json:"local_host"`
+	LocalPort    int                          `json:"local_port"`
+	Status       model.ServerConnectionStatus `json:"status"`
+	AutoStart    bool                         `json:"auto_start"`
+	LastError    string                       `json:"last_error"`
+	Remark       string                       `json:"remark"`
+	CreatedAt    string                       `json:"created_at"`
+	UpdatedAt    string                       `json:"updated_at"`
 }
 
 func NewServerHandler(database *sql.DB, log *logger.Logger, defaults *config.ServerDefaultsConfig) *ServerHandler {
@@ -56,7 +75,7 @@ func (h *ServerHandler) RegisterRoutes(group *gin.RouterGroup) {
 func (h *ServerHandler) list(c *gin.Context) {
 	var page PageRequest
 	if err := c.ShouldBindQuery(&page); err != nil {
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "invalid pagination parameters")
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "分页参数不正确")
 		return
 	}
 	page.Normalize()
@@ -65,7 +84,7 @@ func (h *ServerHandler) list(c *gin.Context) {
 		h.writeDBError(c, err, "list server connections failed")
 		return
 	}
-	OK(c, NewPageResponse(connections, total, page))
+	OK(c, NewPageResponse(serverConnectionResponses(connections), total, page))
 }
 
 func (h *ServerHandler) create(c *gin.Context) {
@@ -159,8 +178,7 @@ func (h *ServerHandler) setStatus(c *gin.Context, status model.ServerConnectionS
 }
 
 func (h *ServerHandler) bindAndValidate(c *gin.Context, req *serverConnectionRequest) bool {
-	if err := c.ShouldBindJSON(req); err != nil {
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "invalid server connection parameters")
+	if !bindJSONOrFail(c, req, "服务端连接参数不正确") {
 		return false
 	}
 	req.Name = strings.TrimSpace(req.Name)
@@ -179,19 +197,19 @@ func (h *ServerHandler) bindAndValidate(c *gin.Context, req *serverConnectionReq
 
 	switch {
 	case req.Name == "":
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "name is required")
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "name 为必填项")
 	case req.ServerHost == "":
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "server_host is required")
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "server_host 为必填项")
 	case !validPort(req.ServerPort):
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "server_port must be between 1 and 65535")
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "server_port 必须在 1 到 65535 之间")
 	case !validPort(req.DataPort):
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "data_port must be between 1 and 65535")
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "data_port 必须在 1 到 65535 之间")
 	case req.ClientSecret == "":
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "client_secret is required")
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "client_secret 为必填项")
 	case req.LocalHost == "":
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "local_host is required")
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "local_host 为必填项")
 	case !validPort(req.LocalPort):
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "local_port must be between 1 and 65535")
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "local_port 必须在 1 到 65535 之间")
 	default:
 		return true
 	}
@@ -207,11 +225,11 @@ func (h *ServerHandler) resolveUseTLS(value *bool) bool {
 
 func (h *ServerHandler) writeDBError(c *gin.Context, err error, fallback string) {
 	if errors.Is(err, db.ErrNotFound) {
-		Fail(c, http.StatusNotFound, CodeNotFound, "server connection not found")
+		Fail(c, http.StatusNotFound, CodeNotFound, "服务端连接不存在")
 		return
 	}
 	if errors.Is(err, db.ErrConflict) {
-		Fail(c, http.StatusConflict, CodeConflict, "server connection conflict")
+		Fail(c, http.StatusConflict, CodeConflict, "服务端连接配置冲突")
 		return
 	}
 	if h.log != nil {
@@ -220,10 +238,35 @@ func (h *ServerHandler) writeDBError(c *gin.Context, err error, fallback string)
 	Fail(c, http.StatusInternalServerError, CodeInternalError, fallback)
 }
 
+func serverConnectionResponses(connections []model.ServerConnection) []serverConnectionResponse {
+	result := make([]serverConnectionResponse, 0, len(connections))
+	for _, connection := range connections {
+		result = append(result, serverConnectionResponse{
+			ID:           connection.ID,
+			Name:         connection.Name,
+			ServerHost:   connection.ServerHost,
+			ServerPort:   connection.ServerPort,
+			DataPort:     connection.DataPort,
+			RemotePort:   connection.RemotePort,
+			UseTLS:       connection.UseTLS,
+			ClientSecret: connection.ClientSecret,
+			LocalHost:    connection.LocalHost,
+			LocalPort:    connection.LocalPort,
+			Status:       connection.Status,
+			AutoStart:    connection.AutoStart,
+			LastError:    connection.LastError,
+			Remark:       connection.Remark,
+			CreatedAt:    connection.CreatedAt,
+			UpdatedAt:    connection.UpdatedAt,
+		})
+	}
+	return result
+}
+
 func parseIDParam(c *gin.Context) (int64, bool) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "invalid id")
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "id 不正确")
 		return 0, false
 	}
 	return id, true

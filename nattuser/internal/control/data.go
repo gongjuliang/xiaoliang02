@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"nattuser/internal/db"
 	"nattuser/internal/model"
 	"nattuser/internal/protocol"
 )
@@ -85,8 +86,16 @@ func (m *Manager) resolveLocalDataOpen(ctx context.Context, connection model.Ser
 	// The service side owns only the public listener. The client deliberately
 	// resolves the private target from this tunnel connection so a server cannot
 	// push an arbitrary LAN address through data_open.
+	if binding, err := db.GetEnabledLocalTunnelByServerTunnel(ctx, m.database, connection.ID, command.TunnelID); err == nil {
+		resolved := dataOpen
+		resolved.LocalHost = strings.TrimSpace(binding.LocalHost)
+		resolved.LocalPort = binding.LocalPort
+		return resolved, nil
+	} else if err != db.ErrNotFound {
+		return protocol.DataOpen{}, fmt.Errorf("load local tunnel binding: %w", err)
+	}
 	if strings.TrimSpace(connection.LocalHost) == "" || connection.LocalPort <= 0 {
-		return protocol.DataOpen{}, fmt.Errorf("invalid local tunnel target")
+		return protocol.DataOpen{}, fmt.Errorf("local tunnel binding is missing or disabled")
 	}
 	resolved := dataOpen
 	resolved.LocalHost = strings.TrimSpace(connection.LocalHost)

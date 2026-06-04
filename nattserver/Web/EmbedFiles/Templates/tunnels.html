@@ -11,9 +11,14 @@
         .secret-box { font-family: monospace; background: #f5f7fb; border: 1px solid #dbe3ef; border-radius: 6px; padding: 8px; margin-top: 8px; word-break: break-all; }
         .inline-actions button { margin-right: 6px; }
         .tunnel-form { display: grid; gap: 12px; padding: 12px 4px 0; }
-        .tunnel-form label { display: grid; gap: 6px; }
+        .tunnel-form label:not(.check-row) { display: grid; gap: 6px; }
         .tunnel-form input { width: 100%; }
         .tunnel-tip { color: #687386; font-size: 13px; }
+        .detail-cell { max-width: 230px; color: #687386; white-space: nowrap; }
+        .detail-box { max-height: 360px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+        .secret-mask { font-family: monospace; color: #334155; }
+        .secret-legacy { color: #8a6d3b; word-break: break-word; }
+        .secret-action, .detail-more { margin-left: 6px; }
     </style>
 </head>
 <body>
@@ -23,18 +28,49 @@
 <script src="/static/js/app.js"></script>
 <script>
 if (NATT.requireAuth()) {
+    function maskSecret(secret) {
+        var value = String(secret || "");
+        if (!value) return "-";
+        if (value.length <= 10) return "******";
+        return NATT.escapeHtml(value.slice(0, 6) + "******" + value.slice(-4));
+    }
+    function secretText(t) {
+        if (t.secret) {
+            return '<span class="secret-mask">' + maskSecret(t.secret) + '</span>' +
+                '<button type="button" class="layui-btn layui-btn-primary layui-btn-xs secret-action" data-act="show-secret" data-secret="' + NATT.escapeHtml(t.secret) + '">查看</button>';
+        }
+        if (t.secret_hint) return '<span class="secret-legacy">历史摘要：' + NATT.escapeHtml(t.secret_hint) + '，轮换秘钥后可查看完整秘钥</span>';
+        return "-";
+    }
+    function renderDetailText(value) {
+        var text = String(value || "");
+        if (!$.trim(text)) return "-";
+        if (text.length <= 20) return NATT.escapeHtml(text);
+        return NATT.escapeHtml(text.slice(0, 20)) + '...' +
+            '<button type="button" class="layui-btn layui-btn-primary layui-btn-xs detail-more" data-act="show-detail" data-detail="' + NATT.escapeHtml(text) + '">详情</button>';
+    }
+    function showTextDialog(title, text, className) {
+        layui.layer.alert('<div class="' + className + '">' + NATT.escapeHtml(text || "-") + '</div>', { title: title, area: "560px" });
+    }
+    function formatBytes(value) {
+        var n = Number(value || 0);
+        if (n < 1024) return n + " B";
+        if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+        if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + " MB";
+        return (n / 1024 / 1024 / 1024).toFixed(1) + " GB";
+    }
     function loadTunnels() {
         NATT.request("GET", "/tunnels?page=1&page_size=100").then(function (p) {
             var rows = (p.items || []).map(function (t) {
                 return '<tr><td>' + t.id + '</td><td>' + NATT.escapeHtml(t.name) + '</td><td>' +
                     NATT.escapeHtml(t.remote_host) + ':' + t.remote_port + '</td><td>' + NATT.badge(t.status) +
-                    '</td><td>' + NATT.escapeHtml(t.secret_hint || "-") + '</td><td class="inline-actions">' +
+                    '</td><td class="detail-cell">' + renderDetailText(t.last_error) + '</td><td>' + formatBytes(t.bytes_in) + '</td><td>' + formatBytes(t.bytes_out) + '</td><td>' + secretText(t) + '</td><td class="inline-actions">' +
                     '<button type="button" class="layui-btn layui-btn-xs" data-act="start" data-id="' + t.id + '">启动</button>' +
                     '<button type="button" class="layui-btn layui-btn-primary layui-btn-xs" data-act="stop" data-id="' + t.id + '">停止</button>' +
                     '<button type="button" class="layui-btn layui-btn-warm layui-btn-xs" data-act="rotate" data-id="' + t.id + '">轮换秘钥</button>' +
                     '<button type="button" class="layui-btn layui-btn-danger layui-btn-xs" data-act="del" data-id="' + t.id + '">删除</button></td></tr>';
             }).join("");
-            $("#content").html('<div class="panel"><div class="toolbar"><h3>隧道</h3><button id="newTunnel" class="layui-btn primary" type="button">新增</button></div><table class="data-table"><thead><tr><th>ID</th><th>名称</th><th>公网监听</th><th>状态</th><th>秘钥</th><th>操作</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
+            $("#content").html('<div class="panel"><div class="toolbar"><h3>隧道</h3><button id="newTunnel" class="layui-btn primary" type="button">新增</button></div><table class="data-table"><thead><tr><th>ID</th><th>名称</th><th>公网监听</th><th>状态</th><th>状态详情</th><th>上行字节</th><th>下行字节</th><th>秘钥</th><th>操作</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
         }).fail(NATT.showError);
     }
     function tunnelForm() {
@@ -43,11 +79,11 @@ if (NATT.requireAuth()) {
             '<label>监听地址<input id="rh" class="layui-input" value="0.0.0.0"></label>' +
             '<label>公网端口<input id="rp" class="layui-input" type="number" placeholder="例如 25502"></label>' +
             '<label>备注<input id="rm" class="layui-input" placeholder="可选"></label>' +
-            '<label><span><input id="as" type="checkbox"> nattuser 连接后自动启动</span></label>' +
+            '<label class="check-row"><input id="as" type="checkbox"><span>nattuser 连接后自动启动</span></label>' +
             '<p class="tunnel-tip">新增只生成隧道和一次性秘钥，不要求 nattuser 当前在线。</p></div>';
     }
     function showSecret(title, secret) {
-        layui.layer.alert(title + '<div class="secret-box">' + NATT.escapeHtml(secret) + '</div>', { title: "秘钥只显示一次", area: "520px" });
+        showTextDialog(title, secret, "secret-box");
     }
     $("#content").on("click", "#newTunnel", function () {
         layui.layer.open({
@@ -65,13 +101,21 @@ if (NATT.requireAuth()) {
                 }).then(function (d) {
                     layui.layer.close(index);
                     loadTunnels();
-                    showSecret("隧道秘钥：", d.secret);
+                    showSecret("隧道秘钥", d.secret);
                 }).fail(NATT.showError);
             }
         });
     });
     $("#content").on("click", "button[data-act]", function () {
         var id = $(this).data("id"), act = $(this).data("act");
+        if (act === "show-detail") {
+            showTextDialog("状态详情", $(this).data("detail"), "detail-box");
+            return;
+        }
+        if (act === "show-secret") {
+            showTextDialog("隧道秘钥", $(this).data("secret"), "secret-box");
+            return;
+        }
         if (act === "del") {
             layui.layer.confirm("确定删除该隧道吗？", { title: "删除确认" }, function (index) {
                 layui.layer.close(index);
@@ -79,7 +123,7 @@ if (NATT.requireAuth()) {
             });
         } else if (act === "rotate") {
             NATT.request("POST", "/tunnels/" + id + "/rotate-secret").then(function (d) {
-                showSecret("新秘钥：", d.secret);
+                showSecret("新秘钥", d.secret);
                 loadTunnels();
             }).fail(NATT.showError);
         } else {

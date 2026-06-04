@@ -69,7 +69,7 @@ func (h *TunnelHandler) RegisterRoutes(group *gin.RouterGroup) {
 func (h *TunnelHandler) list(c *gin.Context) {
 	var page PageRequest
 	if err := c.ShouldBindQuery(&page); err != nil {
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "invalid pagination parameters")
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "分页参数不正确")
 		return
 	}
 	page.Normalize()
@@ -100,11 +100,11 @@ func (h *TunnelHandler) create(c *gin.Context) {
 	}
 	secret, secretHash, secretHint, err := buildTunnelSecret()
 	if err != nil {
-		Fail(c, http.StatusInternalServerError, CodeInternalError, "generate tunnel secret failed")
+		Fail(c, http.StatusInternalServerError, CodeInternalError, "生成隧道秘钥失败")
 		return
 	}
 	key, err := db.CreateTunnelKey(c.Request.Context(), h.database, db.CreateTunnelKeyParams{
-		TunnelID: tunnel.ID, SecretHash: secretHash, SecretHint: secretHint,
+		TunnelID: tunnel.ID, SecretHash: secretHash, SecretHint: secretHint, SecretPlain: secret,
 	})
 	if err != nil {
 		h.writeDBError(c, err, "create tunnel key failed")
@@ -151,10 +151,10 @@ func (h *TunnelHandler) rotateSecret(c *gin.Context) {
 	}
 	secret, secretHash, secretHint, err := buildTunnelSecret()
 	if err != nil {
-		Fail(c, http.StatusInternalServerError, CodeInternalError, "generate tunnel secret failed")
+		Fail(c, http.StatusInternalServerError, CodeInternalError, "生成隧道秘钥失败")
 		return
 	}
-	key, err := db.RotateTunnelSecret(c.Request.Context(), h.database, id, secretHash, secretHint)
+	key, err := db.RotateTunnelSecret(c.Request.Context(), h.database, id, secretHash, secretHint, secret)
 	if err != nil {
 		h.writeDBError(c, err, "rotate tunnel secret failed")
 		return
@@ -255,8 +255,7 @@ func (h *TunnelHandler) setStatus(c *gin.Context, status model.TunnelStatus, act
 }
 
 func (h *TunnelHandler) bindAndValidateTunnelRequest(c *gin.Context, req *tunnelRequest) bool {
-	if err := c.ShouldBindJSON(req); err != nil {
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "invalid tunnel parameters")
+	if !bindJSONOrFail(c, req, "隧道参数不正确") {
 		return false
 	}
 	req.Name = strings.TrimSpace(req.Name)
@@ -271,13 +270,13 @@ func (h *TunnelHandler) bindAndValidateTunnelRequest(c *gin.Context, req *tunnel
 
 	switch {
 	case req.Name == "":
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "name is required")
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "name 为必填项")
 	case req.Protocol != string(model.TunnelProtocolTCP):
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "only tcp protocol is supported")
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "仅支持 tcp 协议")
 	case !validPort(req.RemotePort):
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "remote_port must be between 1 and 65535")
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "remote_port 必须在 1 到 65535 之间")
 	case req.RemotePort < h.cfg.RemotePortMin || req.RemotePort > h.cfg.RemotePortMax:
-		Fail(c, http.StatusBadRequest, CodeBadRequest, fmt.Sprintf("remote_port must be between %d and %d", h.cfg.RemotePortMin, h.cfg.RemotePortMax))
+		Fail(c, http.StatusBadRequest, CodeBadRequest, fmt.Sprintf("remote_port 必须在 %d 到 %d 之间", h.cfg.RemotePortMin, h.cfg.RemotePortMax))
 	default:
 		return true
 	}
@@ -286,11 +285,11 @@ func (h *TunnelHandler) bindAndValidateTunnelRequest(c *gin.Context, req *tunnel
 
 func (h *TunnelHandler) writeDBError(c *gin.Context, err error, fallback string) {
 	if errors.Is(err, db.ErrNotFound) {
-		Fail(c, http.StatusNotFound, CodeNotFound, "tunnel not found")
+		Fail(c, http.StatusNotFound, CodeNotFound, "隧道不存在")
 		return
 	}
 	if errors.Is(err, db.ErrConflict) {
-		Fail(c, http.StatusConflict, CodeConflict, "remote_port already exists")
+		Fail(c, http.StatusConflict, CodeConflict, "公网端口已存在")
 		return
 	}
 	if h.log != nil {
@@ -301,7 +300,7 @@ func (h *TunnelHandler) writeDBError(c *gin.Context, err error, fallback string)
 
 func (h *TunnelHandler) writeRuntimeError(c *gin.Context, err error, fallback string) {
 	if errors.Is(err, db.ErrNotFound) {
-		Fail(c, http.StatusNotFound, CodeNotFound, "tunnel not found")
+		Fail(c, http.StatusNotFound, CodeNotFound, "隧道不存在")
 		return
 	}
 	message := err.Error()
@@ -324,7 +323,7 @@ func parseOptionalInt64Query(c *gin.Context, key string) (int64, bool) {
 	}
 	parsed, err := strconv.ParseInt(value, 10, 64)
 	if err != nil || parsed <= 0 {
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "invalid "+key)
+		Fail(c, http.StatusBadRequest, CodeBadRequest, key+" 不正确")
 		return 0, false
 	}
 	return parsed, true

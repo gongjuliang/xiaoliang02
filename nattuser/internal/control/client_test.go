@@ -139,6 +139,7 @@ func handleFakeControlConn(conn net.Conn, attempt int, heartbeatSeen chan<- stru
 	response, err := protocol.NewMessage(protocol.TypeAuthResponse, 42, 0, "", protocol.AuthResponse{
 		Success:         true,
 		ClientID:        42,
+		RemotePort:      18080,
 		ProtocolVersion: protocol.Version,
 	})
 	if err != nil {
@@ -170,4 +171,107 @@ func handleFakeControlConn(conn net.Conn, attempt int, heartbeatSeen chan<- stru
 	close(heartbeatSeen)
 	<-releaseSecondConnection
 	return nil
+}
+
+func TestManagerStoresRemotePortFromAuthResponse(t *testing.T) {
+	ctx := context.Background()
+	database, err := db.Open(ctx, filepath.Join(t.TempDir(), "test.db"), nil)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer database.Close()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen fake control server: %v", err)
+	}
+	defer listener.Close()
+	_, portText, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatalf("split listener addr: %v", err)
+	}
+	var port int
+	if _, err := fmt.Sscanf(portText, "%d", &port); err != nil {
+		t.Fatalf("parse listener port: %v", err)
+	}
+
+	connection, err := db.CreateServerConnection(ctx, database, db.CreateServerConnectionParams{
+		Name:         "remote-port-server",
+		ServerHost:   "127.0.0.1",
+		ServerPort:   port,
+		DataPort:     port + 1,
+		ClientSecret: "natt_client_secret",
+		AutoStart:    true,
+	})
+	if err != nil {
+		t.Fatalf("create server connection: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			done <- fmt.Errorf("accept: %w", err)
+			return
+		}
+		defer conn.Close()
+		message, err := protocol.ReadMessage(conn)
+		if err != nil {
+			done <- fmt.Errorf("read auth: %w", err)
+			return
+		}
+		response, err := protocol.NewMessage(protocol.TypeAuthResponse, 42, 99, "", protocol.AuthResponse{
+			Success:         true,
+			ClientID:        42,
+			TunnelID:        99,
+			RemotePort:      19090,
+			ProtocolVersion: protocol.Version,
+		})
+		if err != nil {
+			done <- err
+			return
+		}
+		response.RequestID = message.RequestID
+		if err := protocol.WriteMessage(conn, response); err != nil {
+			done <- fmt.Errorf("write response: %w", err)
+			return
+		}
+		done <- nil
+	}()
+
+	cfg := config.Default()
+	manager := NewManagerWithOptions(cfg, database, nil, Options{
+		DialTimeout:       200 * time.Millisecond,
+		HeartbeatInterval: time.Hour,
+	})
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	err = manager.connectAndServe(runCtx, connection)
+	if err == nil {
+		t.Fatal("connectAndServe returned nil; expected read loop to end after fake server closes")
+	}
+	select {
+	case serverErr := <-done:
+		if serverErr != nil {
+			t.Fatalf("fake server failed: %v", serverErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for fake server")
+	}
+	stored, err := db.GetServerConnectionByID(ctx, database, connection.ID)
+	if err != nil {
+		t.Fatalf("get server connection: %v", err)
+	}
+	if stored.RemotePort != 19090 {
+		t.Fatalf("remote_port=%d want=19090 stored=%+v", stored.RemotePort, stored)
+	}
+}
+
+func TestManagerLocalizesProtocolAuthErrors(t *testing.T) {
+	if got := localizeProtocolError(protocol.ProtocolError{Code: protocol.CodeUnauthorized, Message: "unauthorized"}); got != "秘钥错误" {
+		t.Fatalf("unauthorized localized to %q", got)
+	}
+	if got := localizeProtocolError(protocol.ProtocolError{Code: protocol.CodeConflict, Message: "该连接正在占用，不得连接"}); got != "该连接正在占用，不得连接" {
+		t.Fatalf("conflict localized to %q", got)
+	}
 }
