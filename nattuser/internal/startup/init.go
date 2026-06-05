@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -161,6 +162,11 @@ func buildInitialConfig(ctx context.Context, base *config.Config, r *http.Reques
 	}
 	cfg.App.Environment = environment
 	applyInitRequest(&cfg, req)
+	if strings.TrimSpace(req.JWTSecret) == "" {
+		if err := assignRandomJWTSecret(&cfg); err != nil {
+			return nil, err
+		}
+	}
 	if err := prepareHTTPSFiles(&cfg, req); err != nil {
 		return nil, err
 	}
@@ -217,6 +223,23 @@ func validAdminPassword(password string) bool {
 		}
 	}
 	return hasLetter && hasDigit
+}
+
+func assignRandomJWTSecret(cfg *config.Config) error {
+	secret, err := generateJWTSecret()
+	if err != nil {
+		return fmt.Errorf("生成 JWT 密钥失败: %w", err)
+	}
+	cfg.Auth.JWTSecret = secret
+	return nil
+}
+
+func generateJWTSecret() (string, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
 func applyInitRequest(cfg *config.Config, req initRequest) {

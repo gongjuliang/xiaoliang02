@@ -2,6 +2,7 @@ package startup
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -17,6 +18,27 @@ import (
 	"nattserver/internal/config"
 	"nattserver/internal/db"
 )
+
+func TestGenerateJWTSecretReturnsRandomURLSafeString(t *testing.T) {
+	first, err := generateJWTSecret()
+	if err != nil {
+		t.Fatalf("generate first jwt secret: %v", err)
+	}
+	second, err := generateJWTSecret()
+	if err != nil {
+		t.Fatalf("generate second jwt secret: %v", err)
+	}
+	if first == second {
+		t.Fatal("generated jwt_secret values must differ")
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(first)
+	if err != nil {
+		t.Fatalf("jwt_secret must be URL-safe base64: %v", err)
+	}
+	if len(raw) != 32 {
+		t.Fatalf("jwt_secret raw bytes=%d want 32", len(raw))
+	}
+}
 
 func TestInitHandlerCreatesConfigFilesAndDatabase(t *testing.T) {
 	dir := t.TempDir()
@@ -72,6 +94,12 @@ func TestInitHandlerCreatesConfigFilesAndDatabase(t *testing.T) {
 	}
 	if generated.HTTP.HTTPSEnabled {
 		t.Fatal("HTTPS should be disabled when init request does not enable it")
+	}
+	if generated.Auth.JWTSecret == cfg.Auth.JWTSecret {
+		t.Fatalf("generated jwt_secret must not reuse default fixed value %q", cfg.Auth.JWTSecret)
+	}
+	if len(generated.Auth.JWTSecret) < 32 {
+		t.Fatalf("generated jwt_secret is too short: %q", generated.Auth.JWTSecret)
 	}
 	for _, path := range []string{cfg.Database.Path, cfg.Auth.SM2PrivateKeyFile, cfg.Auth.SM2PublicKeyFile} {
 		if _, err := os.Stat(path); err != nil {
