@@ -139,7 +139,7 @@
 - [x] 实现删除服务端连接接口 `DELETE /api/client/v1/servers/:id`。
 - [x] 实现连接服务端接口 `POST /api/client/v1/servers/:id/start`。
 - [x] 实现断开服务端接口 `POST /api/client/v1/servers/:id/stop`。
-- [x] 支持配置服务端地址、接入端口、TLS 开关、客户端秘钥、自动连接。
+- [x] 支持配置服务端地址、接入端口、客户端秘钥、自动连接。
 - [x] 所有修改操作写入审计日志。
 
 ### 5.2 本地状态接口
@@ -166,8 +166,7 @@
 
 ### 6.2 服务端控制连接
 
-- [x] 启动客户端控制连接监听端口，默认 `7000`。
-- [x] 支持 TLS 开关和证书配置。
+- [x] 启动客户端控制连接监听端口，默认 `25511`。
 - [x] 接收 `auth_request` 并校验客户端秘钥。
 - [x] 认证成功后绑定客户端在线状态。
 - [x] 认证失败时返回错误并关闭连接。
@@ -202,7 +201,7 @@
 
 ### 7.2 客户端数据连接
 
-- [x] 收到 `data_open` 后连接服务端数据连接端口，默认 `7001`。
+- [x] 收到 `data_open` 后连接服务端数据连接端口，默认 `25512`。
 - [x] 数据连接首帧发送客户端秘钥、`tunnel_id`、`connection_id`。
 - [x] 认证成功后按 `server_connection_id + server_tunnel_id` 查询 `local_tunnels`，再连接本地 `local_host:local_port`。
 - [x] 缺少本地绑定或绑定禁用时向服务端返回 `data_close` 或隧道错误状态。

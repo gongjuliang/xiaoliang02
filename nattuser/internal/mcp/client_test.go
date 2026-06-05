@@ -8,12 +8,34 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"nattuser/internal/config"
 	"nattuser/internal/db"
 	"nattuser/internal/model"
 )
+
+type testJSONRPCError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+type testJSONRPCResponse struct {
+	JSONRPC string            `json:"jsonrpc"`
+	ID      int               `json:"id"`
+	Result  json.RawMessage   `json:"result"`
+	Error   *testJSONRPCError `json:"error"`
+}
+
+type testMCPToolResult struct {
+	Content []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	} `json:"content"`
+	StructuredContent json.RawMessage `json:"structuredContent"`
+	IsError           bool            `json:"isError"`
+}
 
 func TestClientMCPRequiresTokenAndListsServers(t *testing.T) {
 	router, database := setupClientMCPRouter(t)
@@ -29,19 +51,11 @@ func TestClientMCPRequiresTokenAndListsServers(t *testing.T) {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
-	var resp mcpResponse
-	decodeMCPResponse(t, rec, &resp)
-	if !resp.Success || resp.Message != "ok" {
-		t.Fatalf("unexpected response: %+v body=%s", resp, rec.Body.String())
-	}
-
 	var page struct {
 		Items []model.ServerConnection `json:"items"`
 		Total int64                    `json:"total"`
 	}
-	if err := json.Unmarshal(resp.Data, &page); err != nil {
-		t.Fatalf("decode page: %v", err)
-	}
+	decodeMCPToolStructured(t, rec, &page)
 	if page.Total != 1 || len(page.Items) != 1 || page.Items[0].Name != "mcp-server" {
 		t.Fatalf("unexpected server page: %+v", page)
 	}
@@ -56,17 +70,70 @@ func TestClientMCPGetsNetworkStatus(t *testing.T) {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
-	var resp mcpResponse
-	decodeMCPResponse(t, rec, &resp)
 	var status struct {
 		Hostname   string `json:"hostname"`
 		Interfaces []any  `json:"interfaces"`
 	}
-	if err := json.Unmarshal(resp.Data, &status); err != nil {
-		t.Fatalf("decode status: %v", err)
-	}
+	decodeMCPToolStructured(t, rec, &status)
 	if status.Hostname == "" {
 		t.Fatalf("hostname is empty in network status: %+v", status)
+	}
+}
+
+func TestClientMCPInitializesListsToolsAndRejectsOldPath(t *testing.T) {
+	router, database := setupClientMCPRouter(t)
+	defer database.Close()
+
+	initRec := callClientMCPMethod(t, router, "client-mcp-token", "initialize", map[string]any{
+		"protocolVersion": "2025-06-18",
+		"capabilities":    map[string]any{},
+		"clientInfo": map[string]any{
+			"name":    "codex-test",
+			"version": "1.0.0",
+		},
+	})
+	if initRec.Code != http.StatusOK {
+		t.Fatalf("initialize status=%d body=%s", initRec.Code, initRec.Body.String())
+	}
+	var initResult struct {
+		ProtocolVersion string `json:"protocolVersion"`
+		ServerInfo      struct {
+			Name string `json:"name"`
+		} `json:"serverInfo"`
+		Capabilities map[string]any `json:"capabilities"`
+	}
+	decodeMCPResult(t, initRec, &initResult)
+	if initResult.ProtocolVersion != "2025-06-18" || initResult.ServerInfo.Name != "nattuser" {
+		t.Fatalf("unexpected initialize result: %+v", initResult)
+	}
+	if _, ok := initResult.Capabilities["tools"]; !ok {
+		t.Fatalf("initialize result missing tools capability: %+v", initResult)
+	}
+
+	listRec := callClientMCPMethod(t, router, "client-mcp-token", "tools/list", map[string]any{})
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("tools/list status=%d body=%s", listRec.Code, listRec.Body.String())
+	}
+	var listResult struct {
+		Tools []struct {
+			Name        string         `json:"name"`
+			Description string         `json:"description"`
+			InputSchema map[string]any `json:"inputSchema"`
+		} `json:"tools"`
+	}
+	decodeMCPResult(t, listRec, &listResult)
+	if !hasTool(listResult.Tools, "client.list_tunnel_connections") || !hasTool(listResult.Tools, "client.get_network_status") {
+		t.Fatalf("tools/list missing expected tools: %+v", listResult.Tools)
+	}
+
+	oldBody, _ := json.Marshal(map[string]any{"tool": "client.list_servers", "params": map[string]any{}})
+	oldReq := httptest.NewRequest(http.MethodPost, "/mcp/tools/call", bytes.NewReader(oldBody))
+	oldReq.Header.Set("Authorization", "Bearer client-mcp-token")
+	oldReq.Header.Set("Content-Type", "application/json")
+	oldRec := httptest.NewRecorder()
+	router.ServeHTTP(oldRec, oldReq)
+	if oldRec.Code != http.StatusNotFound && oldRec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("old MCP path status=%d body=%s", oldRec.Code, oldRec.Body.String())
 	}
 }
 
@@ -84,9 +151,10 @@ func TestClientMCPAuditsEveryToolCallAndSanitizesParams(t *testing.T) {
 	rec = callClientMCP(t, router, "client-mcp-token", "client.unknown_tool", map[string]any{
 		"access_token": "also-secret",
 	})
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusOK {
 		t.Fatalf("unknown status=%d body=%s", rec.Code, rec.Body.String())
 	}
+	assertMCPToolError(t, rec, "unknown MCP tool")
 
 	logs, total, err := db.ListAuditLogs(context.Background(), database, 20, 0)
 	if err != nil {
@@ -122,12 +190,8 @@ func TestClientMCPConnectsDisconnectsAndWritesAuditLogs(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("connect status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	var connectResp mcpResponse
-	decodeMCPResponse(t, rec, &connectResp)
 	var connected model.ServerConnection
-	if err := json.Unmarshal(connectResp.Data, &connected); err != nil {
-		t.Fatalf("decode connected server: %v", err)
-	}
+	decodeMCPToolStructured(t, rec, &connected)
 	if connected.Status != model.ServerConnectionStatusConnected {
 		t.Fatalf("status=%s want=%s", connected.Status, model.ServerConnectionStatusConnected)
 	}
@@ -136,12 +200,8 @@ func TestClientMCPConnectsDisconnectsAndWritesAuditLogs(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("disconnect status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	var disconnectResp mcpResponse
-	decodeMCPResponse(t, rec, &disconnectResp)
 	var stopped model.ServerConnection
-	if err := json.Unmarshal(disconnectResp.Data, &stopped); err != nil {
-		t.Fatalf("decode stopped server: %v", err)
-	}
+	decodeMCPToolStructured(t, rec, &stopped)
 	if stopped.Status != model.ServerConnectionStatusStopped {
 		t.Fatalf("status=%s want=%s", stopped.Status, model.ServerConnectionStatusStopped)
 	}
@@ -168,15 +228,11 @@ func TestClientMCPListsLocalTunnels(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	var resp mcpResponse
-	decodeMCPResponse(t, rec, &resp)
 	var page struct {
 		Items []localTunnelStatus `json:"items"`
 		Total int64               `json:"total"`
 	}
-	if err := json.Unmarshal(resp.Data, &page); err != nil {
-		t.Fatalf("decode local tunnels: %v", err)
-	}
+	decodeMCPToolStructured(t, rec, &page)
 	if page.Total != 1 || len(page.Items) != 1 || page.Items[0].ServerName != "mcp-server" {
 		t.Fatalf("unexpected local tunnel page: %+v", page)
 	}
@@ -213,14 +269,24 @@ func setupClientMCPRouter(t *testing.T) (http.Handler, *sql.DB) {
 
 func callClientMCP(t *testing.T, handler http.Handler, token string, tool string, params any) *httptest.ResponseRecorder {
 	t.Helper()
+	return callClientMCPMethod(t, handler, token, "tools/call", map[string]any{
+		"name":      tool,
+		"arguments": params,
+	})
+}
+
+func callClientMCPMethod(t *testing.T, handler http.Handler, token string, method string, params any) *httptest.ResponseRecorder {
+	t.Helper()
 	body, err := json.Marshal(map[string]any{
-		"tool":   tool,
-		"params": params,
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  method,
+		"params":  params,
 	})
 	if err != nil {
 		t.Fatalf("encode request: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodPost, "/mcp/tools/call", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -230,11 +296,61 @@ func callClientMCP(t *testing.T, handler http.Handler, token string, tool string
 	return rec
 }
 
-func decodeMCPResponse(t *testing.T, rec *httptest.ResponseRecorder, target any) {
+func decodeMCPResult(t *testing.T, rec *httptest.ResponseRecorder, target any) {
 	t.Helper()
-	if err := json.Unmarshal(rec.Body.Bytes(), target); err != nil {
+	var resp testJSONRPCResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v body=%s", err, rec.Body.String())
 	}
+	if resp.JSONRPC != "2.0" || resp.ID != 1 {
+		t.Fatalf("unexpected json-rpc envelope: %+v body=%s", resp, rec.Body.String())
+	}
+	if resp.Error != nil {
+		t.Fatalf("unexpected json-rpc error: %+v body=%s", resp.Error, rec.Body.String())
+	}
+	if err := json.Unmarshal(resp.Result, target); err != nil {
+		t.Fatalf("decode result: %v body=%s", err, rec.Body.String())
+	}
+}
+
+func decodeMCPToolStructured(t *testing.T, rec *httptest.ResponseRecorder, target any) {
+	t.Helper()
+	var result testMCPToolResult
+	decodeMCPResult(t, rec, &result)
+	if result.IsError {
+		t.Fatalf("unexpected tool error: %+v body=%s", result, rec.Body.String())
+	}
+	if len(result.Content) == 0 || result.Content[0].Type != "text" {
+		t.Fatalf("tool result missing text content: %+v", result)
+	}
+	if err := json.Unmarshal(result.StructuredContent, target); err != nil {
+		t.Fatalf("decode structured content: %v body=%s", err, rec.Body.String())
+	}
+}
+
+func assertMCPToolError(t *testing.T, rec *httptest.ResponseRecorder, want string) {
+	t.Helper()
+	var result testMCPToolResult
+	decodeMCPResult(t, rec, &result)
+	if !result.IsError {
+		t.Fatalf("expected tool error: %+v body=%s", result, rec.Body.String())
+	}
+	if len(result.Content) == 0 || !strings.Contains(result.Content[0].Text, want) {
+		t.Fatalf("tool error %q does not contain %q", result.Content, want)
+	}
+}
+
+func hasTool(tools []struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	InputSchema map[string]any `json:"inputSchema"`
+}, name string) bool {
+	for _, tool := range tools {
+		if tool.Name == name && tool.Description != "" && tool.InputSchema["type"] == "object" {
+			return true
+		}
+	}
+	return false
 }
 
 func hasAuditAction(logs []model.AuditLog, action string) bool {

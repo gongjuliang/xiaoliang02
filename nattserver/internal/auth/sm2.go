@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
@@ -43,6 +44,11 @@ func NewSM2Cipher(privateKeyFile string, publicKeyFile string) (*SM2Cipher, erro
 
 func (c *SM2Cipher) PublicKeyPEM() string {
 	return c.publicPEM
+}
+
+func (c *SM2Cipher) PublicKeyHex() string {
+	raw := elliptic.Marshal(c.privateKey.Curve, c.privateKey.X, c.privateKey.Y)
+	return hex.EncodeToString(raw)
 }
 
 func (c *SM2Cipher) DecryptToString(ciphertext string) (string, error) {

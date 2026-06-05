@@ -222,12 +222,16 @@ func fetchPublicKey(t *testing.T, router http.Handler, path string) string {
 	}
 	var data struct {
 		PublicKeyPEM string `json:"public_key_pem"`
+		PublicKeyHex string `json:"public_key_hex"`
 	}
 	if err := json.Unmarshal(resp.Data, &data); err != nil {
 		t.Fatalf("decode public key data: %v", err)
 	}
 	if data.PublicKeyPEM == "" {
 		t.Fatal("expected public key pem")
+	}
+	if !strings.HasPrefix(data.PublicKeyHex, "04") || len(data.PublicKeyHex) != 130 {
+		t.Fatalf("unexpected public key hex %q", data.PublicKeyHex)
 	}
 	return data.PublicKeyPEM
 }

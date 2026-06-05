@@ -105,6 +105,7 @@ func (h *AuthHandler) publicKey(c *gin.Context) {
 		"algorithm":      "SM2",
 		"cipher_format":  "base64",
 		"public_key_pem": h.sm2Cipher.PublicKeyPEM(),
+		"public_key_hex": h.sm2Cipher.PublicKeyHex(),
 	})
 }
 

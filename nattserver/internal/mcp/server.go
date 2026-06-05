@@ -19,6 +19,17 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const (
+	jsonRPCVersion       = "2.0"
+	mcpProtocolLatest    = "2025-11-25"
+	mcpProtocolFallback  = "2025-06-18"
+	jsonRPCParseError    = -32700
+	jsonRPCInvalidReq    = -32600
+	jsonRPCMethodMissing = -32601
+	jsonRPCInvalidParams = -32602
+	jsonRPCInternalError = -32603
+)
+
 type TunnelRuntime interface {
 	StartTunnel(ctx context.Context, id int64) (model.Tunnel, error)
 	StopTunnel(ctx context.Context, id int64) (model.Tunnel, error)
@@ -31,15 +42,45 @@ type serverHandler struct {
 	runtime   TunnelRuntime
 }
 
-type mcpRequest struct {
-	Tool   string          `json:"tool"`
-	Params json.RawMessage `json:"params"`
+type jsonRPCRequest struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id,omitempty"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params,omitempty"`
 }
 
-type mcpResponse struct {
-	Success bool            `json:"success"`
-	Message string          `json:"message"`
-	Data    json.RawMessage `json:"data"`
+type jsonRPCResponse struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id,omitempty"`
+	Result  any             `json:"result,omitempty"`
+	Error   *jsonRPCError   `json:"error,omitempty"`
+}
+
+type jsonRPCError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+type toolCallParams struct {
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments"`
+}
+
+type mcpTool struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	InputSchema map[string]any `json:"inputSchema"`
+}
+
+type mcpToolResult struct {
+	Content           []mcpContent    `json:"content"`
+	StructuredContent json.RawMessage `json:"structuredContent,omitempty"`
+	IsError           bool            `json:"isError"`
+}
+
+type mcpContent struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
 }
 
 type pageParams struct {
@@ -79,7 +120,7 @@ func NewServerRouter(cfg config.MCPConfig, database *sql.DB, log *logger.Logger,
 	RegisterServerRoutes(router, database, log, runtime, tunnelCfg...)
 
 	router.NoRoute(func(c *gin.Context) {
-		writeFail(c, http.StatusNotFound, "resource not found")
+		c.JSON(http.StatusNotFound, gin.H{"error": "resource not found"})
 	})
 	return router
 }
@@ -92,111 +133,169 @@ func RegisterServerRoutes(router *gin.Engine, database *sql.DB, log *logger.Logg
 		runtime:   runtime,
 	}
 
-	group := router.Group("/mcp")
-	group.GET("/health", func(c *gin.Context) {
-		writeOK(c, gin.H{"status": "ok"})
-	})
-
-	protected := group.Group("")
+	protected := router.Group("")
 	protected.Use(tokenAuthMiddleware(database))
-	protected.POST("/tools/call", handler.callTool)
+	protected.POST("/mcp", handler.handleJSONRPC)
+	protected.GET("/mcp", methodNotAllowed)
+	protected.DELETE("/mcp", methodNotAllowed)
+	protected.PUT("/mcp", methodNotAllowed)
+	protected.PATCH("/mcp", methodNotAllowed)
 }
 
-func (h *serverHandler) callTool(c *gin.Context) {
-	var req mcpRequest
-	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.Tool) == "" {
-		writeFail(c, http.StatusBadRequest, "invalid MCP tool request")
-		h.auditToolCall(c, "invalid_request", nil)
+func methodNotAllowed(c *gin.Context) {
+	c.JSON(http.StatusMethodNotAllowed, gin.H{"error": "method not allowed"})
+}
+
+func (h *serverHandler) handleJSONRPC(c *gin.Context) {
+	var req jsonRPCRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeJSONRPCError(c, nil, jsonRPCParseError, "JSON-RPC 请求格式错误")
 		return
 	}
-	tool := strings.TrimSpace(req.Tool)
-	defer h.auditToolCall(c, tool, req.Params)
+	if req.JSONRPC != jsonRPCVersion || strings.TrimSpace(req.Method) == "" {
+		writeJSONRPCError(c, req.ID, jsonRPCInvalidReq, "JSON-RPC 请求无效")
+		return
+	}
 
-	// Dispatch is explicit rather than reflective, which keeps the MCP surface
-	// limited to the documented server.* tools.
+	switch req.Method {
+	case "initialize":
+		writeJSONRPCResult(c, req.ID, h.initialize(req.Params))
+	case "notifications/initialized":
+		if len(req.ID) == 0 {
+			c.Status(http.StatusAccepted)
+			return
+		}
+		writeJSONRPCResult(c, req.ID, gin.H{})
+	case "ping":
+		writeJSONRPCResult(c, req.ID, gin.H{})
+	case "tools/list":
+		h.auditMCP(c, "mcp_tools_list", "tools/list", req.Params)
+		writeJSONRPCResult(c, req.ID, gin.H{"tools": serverTools()})
+	case "tools/call":
+		h.handleToolCall(c, req.ID, req.Params)
+	default:
+		writeJSONRPCError(c, req.ID, jsonRPCMethodMissing, "未知 MCP 方法")
+	}
+}
+
+func (h *serverHandler) initialize(raw json.RawMessage) gin.H {
+	var params struct {
+		ProtocolVersion string `json:"protocolVersion"`
+	}
+	_ = json.Unmarshal(raw, &params)
+	version := mcpProtocolLatest
+	if params.ProtocolVersion == mcpProtocolFallback {
+		version = mcpProtocolFallback
+	}
+	return gin.H{
+		"protocolVersion": version,
+		"serverInfo": gin.H{
+			"name":    "nattserver",
+			"version": "1.0.0",
+		},
+		"capabilities": gin.H{
+			"tools": gin.H{},
+		},
+	}
+}
+
+func (h *serverHandler) handleToolCall(c *gin.Context, id json.RawMessage, raw json.RawMessage) {
+	var params toolCallParams
+	if err := json.Unmarshal(raw, &params); err != nil || strings.TrimSpace(params.Name) == "" {
+		h.auditMCP(c, "mcp_tool_call", "invalid_request", raw)
+		writeJSONRPCError(c, id, jsonRPCInvalidParams, "MCP 工具调用参数无效")
+		return
+	}
+	tool := strings.TrimSpace(params.Name)
+	result, err := h.executeTool(c.Request.Context(), tool, params.Arguments)
+	if err != nil {
+		h.auditMCP(c, "mcp_tool_call", tool, params.Arguments)
+		writeJSONRPCResult(c, id, toolErrorResult(err.Error()))
+		return
+	}
+	h.auditMCP(c, "mcp_tool_call", tool, params.Arguments)
+	writeJSONRPCResult(c, id, toolSuccessResult(result))
+}
+
+func (h *serverHandler) executeTool(ctx context.Context, tool string, raw json.RawMessage) (any, error) {
 	switch tool {
 	case "server.list_clients":
-		h.listClients(c, req.Params)
+		return h.listClients(ctx, raw)
 	case "server.get_client":
-		h.getClient(c, req.Params)
+		return h.getClient(ctx, raw)
 	case "server.list_tunnels":
-		h.listTunnels(c, req.Params)
+		return h.listTunnels(ctx, raw)
 	case "server.create_tunnel":
-		h.createTunnel(c, req.Params)
+		return h.createTunnel(ctx, raw)
 	case "server.start_tunnel":
-		h.startTunnel(c, req.Params)
+		return h.runTunnelAction(ctx, raw, h.startTunnelByID, "mcp_tunnel_start", "mcp started tunnel")
 	case "server.stop_tunnel":
-		h.stopTunnel(c, req.Params)
+		return h.runTunnelAction(ctx, raw, h.stopTunnelByID, "mcp_tunnel_stop", "mcp stopped tunnel")
 	case "server.delete_tunnel":
-		h.deleteTunnel(c, req.Params)
+		return h.deleteTunnel(ctx, raw)
 	case "server.get_dashboard":
-		h.getDashboard(c)
+		return h.getDashboard(ctx)
 	default:
-		writeFail(c, http.StatusBadRequest, "unknown MCP tool")
+		return nil, fmt.Errorf("unknown MCP tool")
 	}
 }
 
-func (h *serverHandler) listClients(c *gin.Context, raw json.RawMessage) {
-	params, ok := bindPageParams(c, raw)
-	if !ok {
-		return
-	}
-	clients, total, err := db.ListClients(c.Request.Context(), h.database, params.limit(), params.offset())
+func (h *serverHandler) listClients(ctx context.Context, raw json.RawMessage) (any, error) {
+	params, err := bindPageParams(raw)
 	if err != nil {
-		h.writeError(c, err, "list clients failed")
-		return
+		return nil, err
 	}
-	writeOK(c, pageResult{Items: clients, Total: total, Page: params.Page, PageSize: params.PageSize})
+	clients, total, err := db.ListClients(ctx, h.database, params.limit(), params.offset())
+	if err != nil {
+		return nil, translateDBError(err, "list clients failed")
+	}
+	return pageResult{Items: clients, Total: total, Page: params.Page, PageSize: params.PageSize}, nil
 }
 
-func (h *serverHandler) getClient(c *gin.Context, raw json.RawMessage) {
+func (h *serverHandler) getClient(ctx context.Context, raw json.RawMessage) (any, error) {
 	var params idParams
-	if !bindParams(c, raw, &params) {
-		return
+	if err := bindParams(raw, &params); err != nil {
+		return nil, err
 	}
 	if params.ID <= 0 {
-		writeFail(c, http.StatusBadRequest, "id is required")
-		return
+		return nil, fmt.Errorf("id is required")
 	}
-	client, err := db.GetClientByID(c.Request.Context(), h.database, params.ID)
+	client, err := db.GetClientByID(ctx, h.database, params.ID)
 	if err != nil {
-		h.writeError(c, err, "get client failed")
-		return
+		return nil, translateDBError(err, "get client failed")
 	}
-	writeOK(c, client)
+	return client, nil
 }
 
-func (h *serverHandler) listTunnels(c *gin.Context, raw json.RawMessage) {
-	params, ok := bindPageParams(c, raw)
-	if !ok {
-		return
-	}
-	tunnels, total, err := db.ListTunnels(c.Request.Context(), h.database, 0, params.limit(), params.offset())
+func (h *serverHandler) listTunnels(ctx context.Context, raw json.RawMessage) (any, error) {
+	params, err := bindPageParams(raw)
 	if err != nil {
-		h.writeError(c, err, "list tunnels failed")
-		return
+		return nil, err
 	}
-	writeOK(c, pageResult{Items: tunnels, Total: total, Page: params.Page, PageSize: params.PageSize})
+	tunnels, total, err := db.ListTunnels(ctx, h.database, 0, params.limit(), params.offset())
+	if err != nil {
+		return nil, translateDBError(err, "list tunnels failed")
+	}
+	return pageResult{Items: tunnels, Total: total, Page: params.Page, PageSize: params.PageSize}, nil
 }
 
-func (h *serverHandler) getDashboard(c *gin.Context) {
-	summary, err := db.GetDashboardSummary(c.Request.Context(), h.database)
+func (h *serverHandler) getDashboard(ctx context.Context) (any, error) {
+	summary, err := db.GetDashboardSummary(ctx, h.database)
 	if err != nil {
-		h.writeError(c, err, "get dashboard failed")
-		return
+		return nil, translateDBError(err, "get dashboard failed")
 	}
-	writeOK(c, summary)
+	return summary, nil
 }
 
-func (h *serverHandler) createTunnel(c *gin.Context, raw json.RawMessage) {
+func (h *serverHandler) createTunnel(ctx context.Context, raw json.RawMessage) (any, error) {
 	var params tunnelParams
-	if !bindParams(c, raw, &params) {
-		return
+	if err := bindParams(raw, &params); err != nil {
+		return nil, err
 	}
-	if !h.validateTunnelParams(c, &params) {
-		return
+	if err := h.validateTunnelParams(&params); err != nil {
+		return nil, err
 	}
-	tunnel, err := db.CreateTunnel(c.Request.Context(), h.database, db.CreateTunnelParams{
+	tunnel, err := db.CreateTunnel(ctx, h.database, db.CreateTunnelParams{
 		Name:       params.Name,
 		Protocol:   model.TunnelProtocolTCP,
 		RemoteHost: params.RemoteHost,
@@ -205,73 +304,57 @@ func (h *serverHandler) createTunnel(c *gin.Context, raw json.RawMessage) {
 		Remark:     params.Remark,
 	})
 	if err != nil {
-		h.writeError(c, err, "create tunnel failed")
-		return
+		return nil, translateDBError(err, "create tunnel failed")
 	}
 	secret, secretHash, secretHint, err := buildMCPSecret()
 	if err != nil {
-		h.writeError(c, err, "generate tunnel secret failed")
-		return
+		return nil, err
 	}
-	key, err := db.CreateTunnelKey(c.Request.Context(), h.database, db.CreateTunnelKeyParams{TunnelID: tunnel.ID, SecretHash: secretHash, SecretHint: secretHint, SecretPlain: secret})
+	key, err := db.CreateTunnelKey(ctx, h.database, db.CreateTunnelKeyParams{TunnelID: tunnel.ID, SecretHash: secretHash, SecretHint: secretHint, SecretPlain: secret})
 	if err != nil {
-		h.writeError(c, err, "create tunnel key failed")
-		return
+		return nil, translateDBError(err, "create tunnel key failed")
 	}
-	h.audit(c, "mcp_tunnel_create", tunnel.ID, fmt.Sprintf("mcp created tunnel %s", tunnel.Name))
-	writeOK(c, gin.H{"tunnel": tunnel, "key": key, "secret": secret})
+	h.audit(ctx, "mcp_tunnel_create", tunnel.ID, fmt.Sprintf("mcp created tunnel %s", tunnel.Name))
+	return gin.H{"tunnel": tunnel, "key": key, "secret": secret}, nil
 }
 
-func (h *serverHandler) startTunnel(c *gin.Context, raw json.RawMessage) {
-	h.runTunnelAction(c, raw, h.startTunnelByID, "mcp_tunnel_start", "mcp started tunnel")
-}
-
-func (h *serverHandler) stopTunnel(c *gin.Context, raw json.RawMessage) {
-	h.runTunnelAction(c, raw, h.stopTunnelByID, "mcp_tunnel_stop", "mcp stopped tunnel")
-}
-
-func (h *serverHandler) deleteTunnel(c *gin.Context, raw json.RawMessage) {
+func (h *serverHandler) deleteTunnel(ctx context.Context, raw json.RawMessage) (any, error) {
 	var params idParams
-	if !bindParams(c, raw, &params) {
-		return
+	if err := bindParams(raw, &params); err != nil {
+		return nil, err
 	}
 	if params.ID <= 0 {
-		writeFail(c, http.StatusBadRequest, "id is required")
-		return
+		return nil, fmt.Errorf("id is required")
 	}
 	if h.runtime != nil {
-		if tunnel, err := db.GetTunnelByID(c.Request.Context(), h.database, params.ID); err == nil && tunnel.Status == model.TunnelStatusRunning {
-			if _, err := h.runtime.StopTunnel(c.Request.Context(), params.ID); err != nil {
-				h.writeError(c, err, "stop tunnel before delete failed")
-				return
+		if tunnel, err := db.GetTunnelByID(ctx, h.database, params.ID); err == nil && tunnel.Status == model.TunnelStatusRunning {
+			if _, err := h.runtime.StopTunnel(ctx, params.ID); err != nil {
+				return nil, translateDBError(err, "stop tunnel before delete failed")
 			}
 		}
 	}
-	tunnel, err := db.DeleteTunnel(c.Request.Context(), h.database, params.ID)
+	tunnel, err := db.DeleteTunnel(ctx, h.database, params.ID)
 	if err != nil {
-		h.writeError(c, err, "delete tunnel failed")
-		return
+		return nil, translateDBError(err, "delete tunnel failed")
 	}
-	h.audit(c, "mcp_tunnel_delete", tunnel.ID, fmt.Sprintf("mcp deleted tunnel %s", tunnel.Name))
-	writeOK(c, tunnel)
+	h.audit(ctx, "mcp_tunnel_delete", tunnel.ID, fmt.Sprintf("mcp deleted tunnel %s", tunnel.Name))
+	return tunnel, nil
 }
 
-func (h *serverHandler) runTunnelAction(c *gin.Context, raw json.RawMessage, actionFn func(context.Context, int64) (model.Tunnel, error), action string, contentPrefix string) {
+func (h *serverHandler) runTunnelAction(ctx context.Context, raw json.RawMessage, actionFn func(context.Context, int64) (model.Tunnel, error), action string, contentPrefix string) (any, error) {
 	var params idParams
-	if !bindParams(c, raw, &params) {
-		return
+	if err := bindParams(raw, &params); err != nil {
+		return nil, err
 	}
 	if params.ID <= 0 {
-		writeFail(c, http.StatusBadRequest, "id is required")
-		return
+		return nil, fmt.Errorf("id is required")
 	}
-	tunnel, err := actionFn(c.Request.Context(), params.ID)
+	tunnel, err := actionFn(ctx, params.ID)
 	if err != nil {
-		h.writeError(c, err, "tunnel runtime action failed")
-		return
+		return nil, translateDBError(err, "tunnel runtime action failed")
 	}
-	h.audit(c, action, tunnel.ID, fmt.Sprintf("%s %s", contentPrefix, tunnel.Name))
-	writeOK(c, tunnel)
+	h.audit(ctx, action, tunnel.ID, fmt.Sprintf("%s %s", contentPrefix, tunnel.Name))
+	return tunnel, nil
 }
 
 func (h *serverHandler) startTunnelByID(ctx context.Context, id int64) (model.Tunnel, error) {
@@ -288,7 +371,7 @@ func (h *serverHandler) stopTunnelByID(ctx context.Context, id int64) (model.Tun
 	return db.SetTunnelStatus(ctx, h.database, id, model.TunnelStatusStopped, "")
 }
 
-func (h *serverHandler) validateTunnelParams(c *gin.Context, params *tunnelParams) bool {
+func (h *serverHandler) validateTunnelParams(params *tunnelParams) error {
 	params.Name = strings.TrimSpace(params.Name)
 	params.Protocol = strings.ToLower(strings.TrimSpace(params.Protocol))
 	params.RemoteHost = strings.TrimSpace(params.RemoteHost)
@@ -301,49 +384,28 @@ func (h *serverHandler) validateTunnelParams(c *gin.Context, params *tunnelParam
 
 	switch {
 	case params.Name == "":
-		writeFail(c, http.StatusBadRequest, "name is required")
+		return fmt.Errorf("name is required")
 	case params.Protocol != string(model.TunnelProtocolTCP):
-		writeFail(c, http.StatusBadRequest, "only tcp protocol is supported")
+		return fmt.Errorf("only tcp protocol is supported")
 	case !validPort(params.RemotePort):
-		writeFail(c, http.StatusBadRequest, "remote_port must be between 1 and 65535")
+		return fmt.Errorf("remote_port must be between 1 and 65535")
 	case params.RemotePort < h.tunnelCfg.RemotePortMin || params.RemotePort > h.tunnelCfg.RemotePortMax:
-		writeFail(c, http.StatusBadRequest, fmt.Sprintf("remote_port must be between %d and %d", h.tunnelCfg.RemotePortMin, h.tunnelCfg.RemotePortMax))
+		return fmt.Errorf("remote_port must be between %d and %d", h.tunnelCfg.RemotePortMin, h.tunnelCfg.RemotePortMax)
 	default:
-		return true
+		return nil
 	}
-	return false
 }
 
-func (h *serverHandler) audit(c *gin.Context, action string, tunnelID int64, content string) {
-	_ = db.InsertAuditLog(c.Request.Context(), h.database, "mcp", action, "tunnel", strconv.FormatInt(tunnelID, 10), content, c.ClientIP())
+func (h *serverHandler) audit(ctx context.Context, action string, tunnelID int64, content string) {
+	_ = db.InsertAuditLog(ctx, h.database, "mcp", action, "tunnel", strconv.FormatInt(tunnelID, 10), content, "")
 }
 
-func (h *serverHandler) auditToolCall(c *gin.Context, tool string, raw json.RawMessage) {
+func (h *serverHandler) auditMCP(c *gin.Context, action string, target string, raw json.RawMessage) {
 	if h.database == nil {
 		return
 	}
-	status := c.Writer.Status()
-	outcome := "成功"
-	if status < 200 || status >= 300 {
-		outcome = "失败"
-	}
-	content := fmt.Sprintf("MCP 工具调用%s tool=%s status=%d params=%s", outcome, tool, status, sanitizeMCPParams(raw))
-	_ = db.InsertAuditLog(c.Request.Context(), h.database, "mcp", "mcp_tool_call", "mcp_tool", tool, content, c.ClientIP())
-}
-
-func (h *serverHandler) writeError(c *gin.Context, err error, fallback string) {
-	if errors.Is(err, db.ErrNotFound) {
-		writeFail(c, http.StatusNotFound, "resource not found")
-		return
-	}
-	if errors.Is(err, db.ErrConflict) {
-		writeFail(c, http.StatusConflict, "resource conflict")
-		return
-	}
-	if h.log != nil {
-		h.log.Errorf("mcp %s: %v", fallback, err)
-	}
-	writeFail(c, http.StatusInternalServerError, fallback)
+	content := fmt.Sprintf("MCP JSON-RPC action=%s target=%s params=%s", action, target, sanitizeMCPParams(raw))
+	_ = db.InsertAuditLog(c.Request.Context(), h.database, "mcp", action, "mcp_tool", target, content, c.ClientIP())
 }
 
 func resolveTunnelConfig(values []config.TunnelConfig) config.TunnelConfig {
@@ -357,27 +419,27 @@ func tokenAuthMiddleware(database *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		enabled, err := db.GetSetting(c.Request.Context(), database, "mcp.enabled")
 		if errors.Is(err, db.ErrNotFound) || !strings.EqualFold(enabled, "true") {
-			writeFail(c, http.StatusForbidden, "mcp disabled")
+			c.JSON(http.StatusForbidden, gin.H{"error": "mcp disabled"})
 			c.Abort()
 			return
 		}
 		if err != nil {
-			writeFail(c, http.StatusInternalServerError, "load mcp settings failed")
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "load mcp settings failed"})
 			c.Abort()
 			return
 		}
 		accessToken, err := db.GetSetting(c.Request.Context(), database, "mcp.access_token")
 		if err != nil {
 			if errors.Is(err, db.ErrNotFound) {
-				writeFail(c, http.StatusUnauthorized, "unauthorized")
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			} else {
-				writeFail(c, http.StatusInternalServerError, "load mcp settings failed")
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "load mcp settings failed"})
 			}
 			c.Abort()
 			return
 		}
 		if strings.TrimSpace(accessToken) == "" || extractToken(c) != accessToken {
-			writeFail(c, http.StatusUnauthorized, "unauthorized")
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			c.Abort()
 			return
 		}
@@ -393,24 +455,23 @@ func extractToken(c *gin.Context) string {
 	return strings.TrimSpace(c.GetHeader("X-MCP-Token"))
 }
 
-func bindPageParams(c *gin.Context, raw json.RawMessage) (pageParams, bool) {
+func bindPageParams(raw json.RawMessage) (pageParams, error) {
 	var params pageParams
-	if !bindParams(c, raw, &params) {
-		return pageParams{}, false
+	if err := bindParams(raw, &params); err != nil {
+		return pageParams{}, err
 	}
 	params.normalize()
-	return params, true
+	return params, nil
 }
 
-func bindParams(c *gin.Context, raw json.RawMessage, target any) bool {
+func bindParams(raw json.RawMessage, target any) error {
 	if len(raw) == 0 || string(raw) == "null" {
-		return true
+		return nil
 	}
 	if err := json.Unmarshal(raw, target); err != nil {
-		writeFail(c, http.StatusBadRequest, "invalid MCP tool parameters")
-		return false
+		return fmt.Errorf("invalid MCP tool parameters")
 	}
-	return true
+	return nil
 }
 
 func (p *pageParams) normalize() {
@@ -459,17 +520,94 @@ func buildMCPSecret() (plain string, hash string, hint string, err error) {
 	return plain, hash, auth.SecretHint(plain), nil
 }
 
-func writeOK(c *gin.Context, data any) {
-	raw, err := json.Marshal(data)
-	if err != nil {
-		writeFail(c, http.StatusInternalServerError, "encode MCP response failed")
-		return
-	}
-	c.JSON(http.StatusOK, mcpResponse{Success: true, Message: "ok", Data: raw})
+func writeJSONRPCResult(c *gin.Context, id json.RawMessage, result any) {
+	c.JSON(http.StatusOK, jsonRPCResponse{JSONRPC: jsonRPCVersion, ID: id, Result: result})
 }
 
-func writeFail(c *gin.Context, status int, message string) {
-	c.JSON(status, mcpResponse{Success: false, Message: message, Data: nil})
+func writeJSONRPCError(c *gin.Context, id json.RawMessage, code int, message string) {
+	c.JSON(http.StatusOK, jsonRPCResponse{JSONRPC: jsonRPCVersion, ID: id, Error: &jsonRPCError{Code: code, Message: message}})
+}
+
+func toolSuccessResult(data any) mcpToolResult {
+	raw, err := json.Marshal(data)
+	if err != nil {
+		raw = []byte("{}")
+	}
+	return mcpToolResult{
+		Content:           []mcpContent{{Type: "text", Text: string(raw)}},
+		StructuredContent: raw,
+		IsError:           false,
+	}
+}
+
+func toolErrorResult(message string) mcpToolResult {
+	return mcpToolResult{
+		Content: []mcpContent{{Type: "text", Text: message}},
+		IsError: true,
+	}
+}
+
+func translateDBError(err error, fallback string) error {
+	switch {
+	case errors.Is(err, db.ErrNotFound):
+		return fmt.Errorf("resource not found")
+	case errors.Is(err, db.ErrConflict):
+		return fmt.Errorf("resource conflict")
+	default:
+		return fmt.Errorf("%s", fallback)
+	}
+}
+
+func serverTools() []mcpTool {
+	return []mcpTool{
+		{Name: "server.list_clients", Description: "List registered NATT clients.", InputSchema: pageSchema()},
+		{Name: "server.get_client", Description: "Get one NATT client by id.", InputSchema: idSchema()},
+		{Name: "server.list_tunnels", Description: "List server TCP tunnels.", InputSchema: pageSchema()},
+		{Name: "server.create_tunnel", Description: "Create a TCP tunnel on the server.", InputSchema: tunnelCreateSchema()},
+		{Name: "server.start_tunnel", Description: "Start a server tunnel by id.", InputSchema: idSchema()},
+		{Name: "server.stop_tunnel", Description: "Stop a server tunnel by id.", InputSchema: idSchema()},
+		{Name: "server.delete_tunnel", Description: "Delete a server tunnel by id.", InputSchema: idSchema()},
+		{Name: "server.get_dashboard", Description: "Get server dashboard status and traffic summary.", InputSchema: objectSchema(nil, nil)},
+	}
+}
+
+func pageSchema() map[string]any {
+	return objectSchema(map[string]any{
+		"page":      map[string]any{"type": "integer", "minimum": 1},
+		"page_size": map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
+	}, nil)
+}
+
+func idSchema() map[string]any {
+	return objectSchema(map[string]any{
+		"id": map[string]any{"type": "integer", "minimum": 1},
+	}, []string{"id"})
+}
+
+func tunnelCreateSchema() map[string]any {
+	return objectSchema(map[string]any{
+		"name":        map[string]any{"type": "string"},
+		"protocol":    map[string]any{"type": "string", "enum": []string{"tcp"}},
+		"remote_host": map[string]any{"type": "string"},
+		"remote_port": map[string]any{"type": "integer", "minimum": 1, "maximum": 65535},
+		"auto_start":  map[string]any{"type": "boolean"},
+		"remark":      map[string]any{"type": "string"},
+	}, []string{"name", "remote_port"})
+}
+
+func objectSchema(properties map[string]any, required []string) map[string]any {
+	if properties == nil {
+		properties = map[string]any{}
+	}
+	schema := map[string]any{
+		"type":                 "object",
+		"properties":           properties,
+		"additionalProperties": false,
+	}
+	if len(required) > 0 {
+		schema["required"] = required
+	}
+	return schema
 }
 
 func sanitizeMCPParams(raw json.RawMessage) string {

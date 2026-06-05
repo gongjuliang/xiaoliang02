@@ -20,20 +20,60 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const (
+	jsonRPCVersion       = "2.0"
+	mcpProtocolLatest    = "2025-11-25"
+	mcpProtocolFallback  = "2025-06-18"
+	jsonRPCParseError    = -32700
+	jsonRPCInvalidReq    = -32600
+	jsonRPCMethodMissing = -32601
+	jsonRPCInvalidParams = -32602
+)
+
 type clientHandler struct {
 	database *sql.DB
 	log      *logger.Logger
 }
 
-type mcpRequest struct {
-	Tool   string          `json:"tool"`
-	Params json.RawMessage `json:"params"`
+type jsonRPCRequest struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id,omitempty"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params,omitempty"`
 }
 
-type mcpResponse struct {
-	Success bool            `json:"success"`
-	Message string          `json:"message"`
-	Data    json.RawMessage `json:"data"`
+type jsonRPCResponse struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id,omitempty"`
+	Result  any             `json:"result,omitempty"`
+	Error   *jsonRPCError   `json:"error,omitempty"`
+}
+
+type jsonRPCError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+type toolCallParams struct {
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments"`
+}
+
+type mcpTool struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	InputSchema map[string]any `json:"inputSchema"`
+}
+
+type mcpToolResult struct {
+	Content           []mcpContent    `json:"content"`
+	StructuredContent json.RawMessage `json:"structuredContent,omitempty"`
+	IsError           bool            `json:"isError"`
+}
+
+type mcpContent struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
 }
 
 type pageParams struct {
@@ -90,7 +130,7 @@ func NewClientRouter(cfg config.MCPConfig, database *sql.DB, log *logger.Logger)
 	RegisterClientRoutes(router, database, log)
 
 	router.NoRoute(func(c *gin.Context) {
-		writeFail(c, http.StatusNotFound, "resource not found")
+		c.JSON(http.StatusNotFound, gin.H{"error": "resource not found"})
 	})
 	return router
 }
@@ -101,101 +141,143 @@ func RegisterClientRoutes(router *gin.Engine, database *sql.DB, log *logger.Logg
 		log:      log,
 	}
 
-	group := router.Group("/mcp")
-	group.GET("/health", func(c *gin.Context) {
-		writeOK(c, gin.H{"status": "ok"})
-	})
-
-	protected := group.Group("")
+	protected := router.Group("")
 	protected.Use(tokenAuthMiddleware(database))
-	protected.POST("/tools/call", handler.callTool)
+	protected.POST("/mcp", handler.handleJSONRPC)
+	protected.GET("/mcp", methodNotAllowed)
+	protected.DELETE("/mcp", methodNotAllowed)
+	protected.PUT("/mcp", methodNotAllowed)
+	protected.PATCH("/mcp", methodNotAllowed)
 }
 
-func (h *clientHandler) callTool(c *gin.Context) {
-	var req mcpRequest
-	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.Tool) == "" {
-		writeFail(c, http.StatusBadRequest, "invalid MCP tool request")
-		h.auditToolCall(c, "invalid_request", nil)
+func methodNotAllowed(c *gin.Context) {
+	c.JSON(http.StatusMethodNotAllowed, gin.H{"error": "method not allowed"})
+}
+
+func (h *clientHandler) handleJSONRPC(c *gin.Context) {
+	var req jsonRPCRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeJSONRPCError(c, nil, jsonRPCParseError, "JSON-RPC 请求格式错误")
 		return
 	}
-	tool := strings.TrimSpace(req.Tool)
-	defer h.auditToolCall(c, tool, req.Params)
+	if req.JSONRPC != jsonRPCVersion || strings.TrimSpace(req.Method) == "" {
+		writeJSONRPCError(c, req.ID, jsonRPCInvalidReq, "JSON-RPC 请求无效")
+		return
+	}
 
-	// Dispatch is explicit rather than reflective, which keeps the MCP surface
-	// limited to the documented client.* tools.
+	switch req.Method {
+	case "initialize":
+		writeJSONRPCResult(c, req.ID, h.initialize(req.Params))
+	case "notifications/initialized":
+		if len(req.ID) == 0 {
+			c.Status(http.StatusAccepted)
+			return
+		}
+		writeJSONRPCResult(c, req.ID, gin.H{})
+	case "ping":
+		writeJSONRPCResult(c, req.ID, gin.H{})
+	case "tools/list":
+		h.auditMCP(c, "mcp_tools_list", "tools/list", req.Params)
+		writeJSONRPCResult(c, req.ID, gin.H{"tools": clientTools()})
+	case "tools/call":
+		h.handleToolCall(c, req.ID, req.Params)
+	default:
+		writeJSONRPCError(c, req.ID, jsonRPCMethodMissing, "未知 MCP 方法")
+	}
+}
+
+func (h *clientHandler) initialize(raw json.RawMessage) gin.H {
+	var params struct {
+		ProtocolVersion string `json:"protocolVersion"`
+	}
+	_ = json.Unmarshal(raw, &params)
+	version := mcpProtocolLatest
+	if params.ProtocolVersion == mcpProtocolFallback {
+		version = mcpProtocolFallback
+	}
+	return gin.H{
+		"protocolVersion": version,
+		"serverInfo": gin.H{
+			"name":    "nattuser",
+			"version": "1.0.0",
+		},
+		"capabilities": gin.H{
+			"tools": gin.H{},
+		},
+	}
+}
+
+func (h *clientHandler) handleToolCall(c *gin.Context, id json.RawMessage, raw json.RawMessage) {
+	var params toolCallParams
+	if err := json.Unmarshal(raw, &params); err != nil || strings.TrimSpace(params.Name) == "" {
+		h.auditMCP(c, "mcp_tool_call", "invalid_request", raw)
+		writeJSONRPCError(c, id, jsonRPCInvalidParams, "MCP 工具调用参数无效")
+		return
+	}
+	tool := strings.TrimSpace(params.Name)
+	result, err := h.executeTool(c.Request.Context(), tool, params.Arguments)
+	if err != nil {
+		h.auditMCP(c, "mcp_tool_call", tool, params.Arguments)
+		writeJSONRPCResult(c, id, toolErrorResult(err.Error()))
+		return
+	}
+	h.auditMCP(c, "mcp_tool_call", tool, params.Arguments)
+	writeJSONRPCResult(c, id, toolSuccessResult(result))
+}
+
+func (h *clientHandler) executeTool(ctx context.Context, tool string, raw json.RawMessage) (any, error) {
 	switch tool {
 	case "client.list_tunnel_connections", "client.list_servers":
-		h.listServers(c, req.Params)
+		return h.listServers(ctx, raw)
 	case "client.connect_tunnel", "client.connect_server":
-		h.connectServer(c, req.Params)
+		return h.setServerStatus(ctx, raw, model.ServerConnectionStatusConnected, "mcp_server_connect", "mcp connected server")
 	case "client.disconnect_tunnel", "client.disconnect_server":
-		h.disconnectServer(c, req.Params)
+		return h.setServerStatus(ctx, raw, model.ServerConnectionStatusStopped, "mcp_server_disconnect", "mcp disconnected server")
 	case "client.list_tunnels":
-		h.listTunnels(c, req.Params)
+		return h.listTunnels(ctx, raw)
 	case "client.get_network_status":
-		h.getNetworkStatus(c)
+		return collectNetworkStatus()
 	default:
-		writeFail(c, http.StatusBadRequest, "unknown MCP tool")
+		return nil, fmt.Errorf("unknown MCP tool")
 	}
 }
 
-func (h *clientHandler) listServers(c *gin.Context, raw json.RawMessage) {
-	params, ok := bindPageParams(c, raw)
-	if !ok {
-		return
-	}
-	servers, total, err := db.ListServerConnections(c.Request.Context(), h.database, params.limit(), params.offset())
+func (h *clientHandler) listServers(ctx context.Context, raw json.RawMessage) (any, error) {
+	params, err := bindPageParams(raw)
 	if err != nil {
-		h.writeError(c, err, "list servers failed")
-		return
+		return nil, err
 	}
-	writeOK(c, pageResult{Items: servers, Total: total, Page: params.Page, PageSize: params.PageSize})
-}
-
-func (h *clientHandler) getNetworkStatus(c *gin.Context) {
-	status, err := collectNetworkStatus()
+	servers, total, err := db.ListServerConnections(ctx, h.database, params.limit(), params.offset())
 	if err != nil {
-		h.writeError(c, err, "get network status failed")
-		return
+		return nil, translateDBError(err, "list servers failed")
 	}
-	writeOK(c, status)
+	return pageResult{Items: servers, Total: total, Page: params.Page, PageSize: params.PageSize}, nil
 }
 
-func (h *clientHandler) connectServer(c *gin.Context, raw json.RawMessage) {
-	h.setServerStatus(c, raw, model.ServerConnectionStatusConnected, "mcp_server_connect", "mcp connected server")
-}
-
-func (h *clientHandler) disconnectServer(c *gin.Context, raw json.RawMessage) {
-	h.setServerStatus(c, raw, model.ServerConnectionStatusStopped, "mcp_server_disconnect", "mcp disconnected server")
-}
-
-func (h *clientHandler) setServerStatus(c *gin.Context, raw json.RawMessage, status model.ServerConnectionStatus, action string, contentPrefix string) {
+func (h *clientHandler) setServerStatus(ctx context.Context, raw json.RawMessage, status model.ServerConnectionStatus, action string, contentPrefix string) (any, error) {
 	var params idParams
-	if !bindParams(c, raw, &params) {
-		return
+	if err := bindParams(raw, &params); err != nil {
+		return nil, err
 	}
 	if params.ID <= 0 {
-		writeFail(c, http.StatusBadRequest, "id is required")
-		return
+		return nil, fmt.Errorf("id is required")
 	}
-	connection, err := db.SetServerConnectionStatus(c.Request.Context(), h.database, params.ID, status, "")
+	connection, err := db.SetServerConnectionStatus(ctx, h.database, params.ID, status, "")
 	if err != nil {
-		h.writeError(c, err, "set server connection status failed")
-		return
+		return nil, translateDBError(err, "set server connection status failed")
 	}
-	h.audit(c, action, connection.ID, fmt.Sprintf("%s %s", contentPrefix, connection.Name))
-	writeOK(c, connection)
+	h.audit(ctx, action, connection.ID, fmt.Sprintf("%s %s", contentPrefix, connection.Name))
+	return connection, nil
 }
 
-func (h *clientHandler) listTunnels(c *gin.Context, raw json.RawMessage) {
-	params, ok := bindPageParams(c, raw)
-	if !ok {
-		return
-	}
-	connections, total, err := db.ListServerConnections(c.Request.Context(), h.database, params.limit(), params.offset())
+func (h *clientHandler) listTunnels(ctx context.Context, raw json.RawMessage) (any, error) {
+	params, err := bindPageParams(raw)
 	if err != nil {
-		h.writeError(c, err, "list local tunnels failed")
-		return
+		return nil, err
+	}
+	connections, total, err := db.ListServerConnections(ctx, h.database, params.limit(), params.offset())
+	if err != nil {
+		return nil, translateDBError(err, "list local tunnels failed")
 	}
 	items := make([]localTunnelStatus, 0, len(connections))
 	for _, connection := range connections {
@@ -211,39 +293,19 @@ func (h *clientHandler) listTunnels(c *gin.Context, raw json.RawMessage) {
 			UpdatedAt:          connection.UpdatedAt,
 		})
 	}
-	writeOK(c, pageResult{Items: items, Total: total, Page: params.Page, PageSize: params.PageSize})
+	return pageResult{Items: items, Total: total, Page: params.Page, PageSize: params.PageSize}, nil
 }
 
-func (h *clientHandler) audit(c *gin.Context, action string, connectionID int64, content string) {
-	_ = db.InsertAuditLog(c.Request.Context(), h.database, "mcp", action, "server_connection", strconv.FormatInt(connectionID, 10), content, c.ClientIP())
+func (h *clientHandler) audit(ctx context.Context, action string, connectionID int64, content string) {
+	_ = db.InsertAuditLog(ctx, h.database, "mcp", action, "server_connection", strconv.FormatInt(connectionID, 10), content, "")
 }
 
-func (h *clientHandler) auditToolCall(c *gin.Context, tool string, raw json.RawMessage) {
+func (h *clientHandler) auditMCP(c *gin.Context, action string, target string, raw json.RawMessage) {
 	if h.database == nil {
 		return
 	}
-	status := c.Writer.Status()
-	outcome := "成功"
-	if status < 200 || status >= 300 {
-		outcome = "失败"
-	}
-	content := fmt.Sprintf("MCP 工具调用%s tool=%s status=%d params=%s", outcome, tool, status, sanitizeMCPParams(raw))
-	_ = db.InsertAuditLog(c.Request.Context(), h.database, "mcp", "mcp_tool_call", "mcp_tool", tool, content, c.ClientIP())
-}
-
-func (h *clientHandler) writeError(c *gin.Context, err error, fallback string) {
-	if errors.Is(err, db.ErrNotFound) {
-		writeFail(c, http.StatusNotFound, "resource not found")
-		return
-	}
-	if errors.Is(err, db.ErrConflict) {
-		writeFail(c, http.StatusConflict, "resource conflict")
-		return
-	}
-	if h.log != nil {
-		h.log.Errorf("mcp %s: %v", fallback, err)
-	}
-	writeFail(c, http.StatusInternalServerError, fallback)
+	content := fmt.Sprintf("MCP JSON-RPC action=%s target=%s params=%s", action, target, sanitizeMCPParams(raw))
+	_ = db.InsertAuditLog(c.Request.Context(), h.database, "mcp", action, "mcp_tool", target, content, c.ClientIP())
 }
 
 func collectNetworkStatus() (networkStatus, error) {
@@ -258,11 +320,10 @@ func collectNetworkStatus() (networkStatus, error) {
 
 	interfaces := make([]networkInterface, 0, len(rawInterfaces))
 	for _, item := range rawInterfaces {
-		addrs := []string{}
-		if rawAddrs, err := item.Addrs(); err == nil {
-			for _, addr := range rawAddrs {
-				addrs = append(addrs, addr.String())
-			}
+		addrs, _ := item.Addrs()
+		addrStrings := make([]string, 0, len(addrs))
+		for _, addr := range addrs {
+			addrStrings = append(addrStrings, addr.String())
 		}
 		interfaces = append(interfaces, networkInterface{
 			Name:         item.Name,
@@ -270,7 +331,7 @@ func collectNetworkStatus() (networkStatus, error) {
 			MTU:          item.MTU,
 			Flags:        item.Flags.String(),
 			HardwareAddr: item.HardwareAddr.String(),
-			Addrs:        addrs,
+			Addrs:        addrStrings,
 		})
 	}
 	return networkStatus{Hostname: hostname, Interfaces: interfaces}, nil
@@ -280,27 +341,27 @@ func tokenAuthMiddleware(database *sql.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		enabled, err := db.GetSetting(c.Request.Context(), database, "mcp.enabled")
 		if errors.Is(err, db.ErrNotFound) || !strings.EqualFold(enabled, "true") {
-			writeFail(c, http.StatusForbidden, "mcp disabled")
+			c.JSON(http.StatusForbidden, gin.H{"error": "mcp disabled"})
 			c.Abort()
 			return
 		}
 		if err != nil {
-			writeFail(c, http.StatusInternalServerError, "load mcp settings failed")
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "load mcp settings failed"})
 			c.Abort()
 			return
 		}
 		accessToken, err := db.GetSetting(c.Request.Context(), database, "mcp.access_token")
 		if err != nil {
 			if errors.Is(err, db.ErrNotFound) {
-				writeFail(c, http.StatusUnauthorized, "unauthorized")
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			} else {
-				writeFail(c, http.StatusInternalServerError, "load mcp settings failed")
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "load mcp settings failed"})
 			}
 			c.Abort()
 			return
 		}
 		if strings.TrimSpace(accessToken) == "" || extractToken(c) != accessToken {
-			writeFail(c, http.StatusUnauthorized, "unauthorized")
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			c.Abort()
 			return
 		}
@@ -316,24 +377,23 @@ func extractToken(c *gin.Context) string {
 	return strings.TrimSpace(c.GetHeader("X-MCP-Token"))
 }
 
-func bindPageParams(c *gin.Context, raw json.RawMessage) (pageParams, bool) {
+func bindPageParams(raw json.RawMessage) (pageParams, error) {
 	var params pageParams
-	if !bindParams(c, raw, &params) {
-		return pageParams{}, false
+	if err := bindParams(raw, &params); err != nil {
+		return pageParams{}, err
 	}
 	params.normalize()
-	return params, true
+	return params, nil
 }
 
-func bindParams(c *gin.Context, raw json.RawMessage, target any) bool {
+func bindParams(raw json.RawMessage, target any) error {
 	if len(raw) == 0 || string(raw) == "null" {
-		return true
+		return nil
 	}
 	if err := json.Unmarshal(raw, target); err != nil {
-		writeFail(c, http.StatusBadRequest, "invalid MCP tool parameters")
-		return false
+		return fmt.Errorf("invalid MCP tool parameters")
 	}
-	return true
+	return nil
 }
 
 func (p *pageParams) normalize() {
@@ -366,17 +426,83 @@ func (p pageParams) offset() int {
 	return (page - 1) * p.limit()
 }
 
-func writeOK(c *gin.Context, data any) {
-	raw, err := json.Marshal(data)
-	if err != nil {
-		writeFail(c, http.StatusInternalServerError, "encode MCP response failed")
-		return
-	}
-	c.JSON(http.StatusOK, mcpResponse{Success: true, Message: "ok", Data: raw})
+func writeJSONRPCResult(c *gin.Context, id json.RawMessage, result any) {
+	c.JSON(http.StatusOK, jsonRPCResponse{JSONRPC: jsonRPCVersion, ID: id, Result: result})
 }
 
-func writeFail(c *gin.Context, status int, message string) {
-	c.JSON(status, mcpResponse{Success: false, Message: message, Data: nil})
+func writeJSONRPCError(c *gin.Context, id json.RawMessage, code int, message string) {
+	c.JSON(http.StatusOK, jsonRPCResponse{JSONRPC: jsonRPCVersion, ID: id, Error: &jsonRPCError{Code: code, Message: message}})
+}
+
+func toolSuccessResult(data any) mcpToolResult {
+	raw, err := json.Marshal(data)
+	if err != nil {
+		raw = []byte("{}")
+	}
+	return mcpToolResult{
+		Content:           []mcpContent{{Type: "text", Text: string(raw)}},
+		StructuredContent: raw,
+		IsError:           false,
+	}
+}
+
+func toolErrorResult(message string) mcpToolResult {
+	return mcpToolResult{
+		Content: []mcpContent{{Type: "text", Text: message}},
+		IsError: true,
+	}
+}
+
+func translateDBError(err error, fallback string) error {
+	switch {
+	case errors.Is(err, db.ErrNotFound):
+		return fmt.Errorf("resource not found")
+	case errors.Is(err, db.ErrConflict):
+		return fmt.Errorf("resource conflict")
+	default:
+		return fmt.Errorf("%s", fallback)
+	}
+}
+
+func clientTools() []mcpTool {
+	return []mcpTool{
+		{Name: "client.list_tunnel_connections", Description: "List configured NATT server tunnel connections.", InputSchema: pageSchema()},
+		{Name: "client.list_servers", Description: "Alias of client.list_tunnel_connections.", InputSchema: pageSchema()},
+		{Name: "client.connect_tunnel", Description: "Mark one tunnel connection as connected.", InputSchema: idSchema()},
+		{Name: "client.connect_server", Description: "Alias of client.connect_tunnel.", InputSchema: idSchema()},
+		{Name: "client.disconnect_tunnel", Description: "Stop one tunnel connection.", InputSchema: idSchema()},
+		{Name: "client.disconnect_server", Description: "Alias of client.disconnect_tunnel.", InputSchema: idSchema()},
+		{Name: "client.list_tunnels", Description: "List local tunnel status summaries.", InputSchema: pageSchema()},
+		{Name: "client.get_network_status", Description: "Get local host network interface status.", InputSchema: objectSchema(nil, nil)},
+	}
+}
+
+func pageSchema() map[string]any {
+	return objectSchema(map[string]any{
+		"page":      map[string]any{"type": "integer", "minimum": 1},
+		"page_size": map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
+	}, nil)
+}
+
+func idSchema() map[string]any {
+	return objectSchema(map[string]any{
+		"id": map[string]any{"type": "integer", "minimum": 1},
+	}, []string{"id"})
+}
+
+func objectSchema(properties map[string]any, required []string) map[string]any {
+	if properties == nil {
+		properties = map[string]any{}
+	}
+	schema := map[string]any{
+		"type":                 "object",
+		"properties":           properties,
+		"additionalProperties": false,
+	}
+	if len(required) > 0 {
+		schema["required"] = required
+	}
+	return schema
 }
 
 func sanitizeMCPParams(raw json.RawMessage) string {

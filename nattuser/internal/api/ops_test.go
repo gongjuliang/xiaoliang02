@@ -107,13 +107,18 @@ func TestClientRouterServesMCPOnHTTPPort(t *testing.T) {
 	defer database.Close()
 
 	body, err := json.Marshal(map[string]any{
-		"tool":   "client.get_network_status",
-		"params": map[string]any{},
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      "client.get_network_status",
+			"arguments": map[string]any{},
+		},
 	})
 	if err != nil {
 		t.Fatalf("marshal mcp request: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodPost, "/mcp/tools/call", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer client-mcp-token")
 	rec := httptest.NewRecorder()

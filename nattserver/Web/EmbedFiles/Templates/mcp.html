@@ -28,11 +28,13 @@
 if (NATT.requireAuth()) {
     function usageHTML() {
         return '<div class="mcp-section"><h4>如何使用 MCP</h4>' +
-            '<p class="hint">MCP 使用当前 HTTP 端口，健康检查为 <code>/mcp/health</code>，工具调用为 <code>POST /mcp/tools/call</code>。请求头支持 <code>Authorization: Bearer MCP_KEY</code> 或 <code>X-MCP-Token: MCP_KEY</code>。</p>' +
+            '<p class="hint">MCP 使用标准 Streamable HTTP JSON-RPC，地址为 <code>POST /mcp</code>。请求头支持 <code>Authorization: Bearer MCP_KEY</code> 或 <code>X-MCP-Token: MCP_KEY</code>。Codex 连接后会先调用 <code>initialize</code>，再通过 <code>tools/list</code> 自动发现工具。</p>' +
             '<div class="mcp-example">' +
-            '<code>提示词：查询当前服务端有哪些隧道\n触发工具：server.list_tunnels\n参数示例：{"page":1,"page_size":20}</code>' +
-            '<code>提示词：帮我启动 ID 为 3 的隧道\n触发工具：server.start_tunnel\n参数示例：{"id":3}</code>' +
-            '<code>提示词：查看服务端仪表盘状态和流量\n触发工具：server.get_dashboard\n参数示例：{}</code>' +
+            '<code>初始化请求：{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"codex","version":"1.0.0"}}}</code>' +
+            '<code>发现工具：{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}</code>' +
+            '<code>提示词：查询当前服务端有哪些隧道\n触发工具：server.list_tunnels\nJSON-RPC：{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"server.list_tunnels","arguments":{"page":1,"page_size":20}}}</code>' +
+            '<code>提示词：帮我启动 ID 为 3 的隧道\n触发工具：server.start_tunnel\nJSON-RPC：{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"server.start_tunnel","arguments":{"id":3}}}</code>' +
+            '<code>提示词：查看服务端仪表盘状态和流量\n触发工具：server.get_dashboard\nJSON-RPC：{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"server.get_dashboard","arguments":{}}}</code>' +
             '</div></div>';
     }
     function tokenText(d) {

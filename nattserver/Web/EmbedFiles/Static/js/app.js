@@ -64,6 +64,7 @@
     }
 
     var captchaID = "";
+    var sm2PublicKeyHex = "";
 
     function loadCaptcha() {
         if (!$("#captchaImage").length) return;
@@ -77,15 +78,47 @@
         });
     }
 
+    function loadSM2PublicKey() {
+        if (!$("#loginForm").length) return;
+        return request("GET", "/auth/sm2-public-key").then(function (data) {
+            sm2PublicKeyHex = data.public_key_hex || "";
+            if (!sm2PublicKeyHex) {
+                return $.Deferred().reject({ message: "登录加密公钥为空，请刷新页面后重试" }).promise();
+            }
+            return sm2PublicKeyHex;
+        }).fail(function (err) {
+            showError(err && err.message ? err : { message: "加载登录加密公钥失败" });
+        });
+    }
+
+    function encryptPasswordForLogin(password) {
+        if (!window.NATTSM2 || !window.NATTSM2.encryptToBase64) {
+            throw new Error("浏览器缺少登录加密组件，请刷新页面后重试");
+        }
+        if (!sm2PublicKeyHex) {
+            throw new Error("登录加密公钥未加载，请刷新页面后重试");
+        }
+        return window.NATTSM2.encryptToBase64(sm2PublicKeyHex, password);
+    }
+
     $("#captchaRefresh").on("click", function () {
         loadCaptcha();
     });
 
     $("#loginForm").on("submit", function (e) {
         e.preventDefault();
+        var encryptedPassword = "";
+        try {
+            encryptedPassword = encryptPasswordForLogin($('[name="password"]').val());
+        } catch (err) {
+            $("#loginError").text(err.message || "密码加密失败，请刷新页面后重试");
+            loadSM2PublicKey();
+            loadCaptcha();
+            return;
+        }
         var payload = {
             username: $.trim($('[name="username"]').val()),
-            password: $('[name="password"]').val(),
+            password: encryptedPassword,
             captcha_id: captchaID,
             captcha_code: $('[name="captcha_code"]').val()
         };
@@ -100,6 +133,7 @@
     });
 
     loadCaptcha();
+    loadSM2PublicKey();
 
     window.NATT = {
         request: request,
@@ -109,6 +143,8 @@
         logout: logout,
         requireAuth: requireAuth,
         token: token,
-        loadCaptcha: loadCaptcha
+        loadCaptcha: loadCaptcha,
+        loadSM2PublicKey: loadSM2PublicKey,
+        encryptPasswordForLogin: encryptPasswordForLogin
     };
 })(jQuery);
