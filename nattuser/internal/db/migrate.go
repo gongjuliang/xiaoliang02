@@ -18,9 +18,6 @@ type migration struct {
 	SQL     string
 }
 
-const defaultAdminUsername = "admin"
-const defaultAdminPassword = "admin123456"
-
 var clientMigrations = []migration{
 	{
 		Version: 1,
@@ -204,7 +201,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		}
 	}
 
-	if err := seedDefaultAdmin(ctx, database, log); err != nil {
+	if err := resetLegacyPasswordHashes(ctx, database, "NATT_USER_ADMIN_PASSWORD", log); err != nil {
 		return err
 	}
 	return nil
@@ -238,38 +235,48 @@ func applyMigration(ctx context.Context, database *sql.DB, item migration) error
 	return tx.Commit()
 }
 
-func seedDefaultAdmin(ctx context.Context, database *sql.DB, log *logger.Logger) error {
-	var count int
-	if err := database.QueryRowContext(ctx, "SELECT COUNT(1) FROM users").Scan(&count); err != nil {
-		return fmt.Errorf("count users: %w", err)
-	}
-	if count > 0 {
-		return nil
+func resetLegacyPasswordHashes(ctx context.Context, database *sql.DB, passwordEnv string, log *logger.Logger) error {
+	rows, err := database.QueryContext(ctx, "SELECT id, password_hash FROM users;")
+	if err != nil {
+		return fmt.Errorf("query user password hashes: %w", err)
 	}
 
-	// The default admin is created only once. Environment variables are read at
-	// first boot so production can avoid shipping the documented dev password.
-	username := strings.TrimSpace(os.Getenv("NATT_USER_ADMIN_USERNAME"))
-	if username == "" {
-		username = defaultAdminUsername
+	var legacyUserIDs []int64
+	for rows.Next() {
+		var id int64
+		var passwordHash string
+		if err := rows.Scan(&id, &passwordHash); err != nil {
+			return fmt.Errorf("scan user password hash: %w", err)
+		}
+		if auth.IsCurrentPasswordHash(passwordHash) {
+			continue
+		}
+		legacyUserIDs = append(legacyUserIDs, id)
 	}
-	password := os.Getenv("NATT_USER_ADMIN_PASSWORD")
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate user password hashes: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close user password hash rows: %w", err)
+	}
+
+	password := strings.TrimSpace(os.Getenv(passwordEnv))
 	if password == "" {
-		password = defaultAdminPassword
+		if len(legacyUserIDs) > 0 && log != nil {
+			log.Infof("legacy password hashes found but %s is not set; keeping existing hashes", passwordEnv)
+		}
+		return nil
 	}
-	hash, err := auth.HashPassword(password)
-	if err != nil {
-		return fmt.Errorf("hash default admin password: %w", err)
-	}
-	if _, err := database.ExecContext(ctx, `
-INSERT INTO users(username, password_hash, role)
-VALUES(?, ?, 'admin');`, username, hash); err != nil {
-		return fmt.Errorf("insert default admin: %w", err)
-	}
-	if log != nil {
-		log.Infof("default admin initialized username=%s", username)
-		if password == defaultAdminPassword {
-			log.Infof("default admin uses initial password; change it before production use")
+	for _, id := range legacyUserIDs {
+		newHash, err := auth.HashPassword(password)
+		if err != nil {
+			return fmt.Errorf("hash reset password: %w", err)
+		}
+		if _, err := database.ExecContext(ctx, "UPDATE users SET password_hash = ? WHERE id = ?;", newHash, id); err != nil {
+			return fmt.Errorf("reset legacy user password hash: %w", err)
+		}
+		if log != nil {
+			log.Infof("reset legacy password hash user_id=%d", id)
 		}
 	}
 	return nil

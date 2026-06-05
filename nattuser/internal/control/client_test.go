@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -267,6 +268,146 @@ func TestManagerStoresRemotePortFromAuthResponse(t *testing.T) {
 	}
 }
 
+func TestManagerMarksConnectionErrorAndClosesDataWhenTunnelStops(t *testing.T) {
+	ctx := context.Background()
+	database, err := db.Open(ctx, filepath.Join(t.TempDir(), "test.db"), nil)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer database.Close()
+
+	connection, err := db.CreateServerConnection(ctx, database, db.CreateServerConnectionParams{
+		Name:         "stopped-by-server",
+		ServerHost:   "127.0.0.1",
+		ServerPort:   7000,
+		DataPort:     7001,
+		ClientSecret: "xiaoliang_client_secret",
+		AutoStart:    true,
+	})
+	if err != nil {
+		t.Fatalf("create server connection: %v", err)
+	}
+
+	manager := NewManagerWithOptions(config.Default(), database, nil, Options{})
+	dataSide, peerSide := net.Pipe()
+	defer peerSide.Close()
+	manager.registerDataConnection(connection.ID, "server-stop-data", dataSide)
+
+	stopMessage, err := protocol.NewMessage(protocol.TypeTunnelStop, 42, 7, "", nil)
+	if err != nil {
+		t.Fatalf("build tunnel_stop message: %v", err)
+	}
+	if err := manager.handleMessage(ctx, connection.ID, nil, stopMessage); err != nil {
+		t.Fatalf("handle tunnel_stop: %v", err)
+	}
+
+	stored, err := db.GetServerConnectionByID(ctx, database, connection.ID)
+	if err != nil {
+		t.Fatalf("get server connection: %v", err)
+	}
+	if stored.Status != model.ServerConnectionStatusError || stored.LastError != serverTunnelStoppedError {
+		t.Fatalf("unexpected stopped status: %+v", stored)
+	}
+	manager.dataMu.Lock()
+	_, stillActive := manager.data["server-stop-data"]
+	manager.dataMu.Unlock()
+	if stillActive {
+		t.Fatal("data session was not removed after tunnel_stop")
+	}
+	_ = peerSide.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	if _, err := peerSide.Read(make([]byte, 1)); err == nil {
+		t.Fatal("data peer remained readable after tunnel_stop")
+	} else if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+		t.Fatalf("data peer was not closed before deadline: %v", err)
+	}
+}
+
+func TestManagerStoresStoppedTunnelAuthErrorFromServer(t *testing.T) {
+	ctx := context.Background()
+	database, err := db.Open(ctx, filepath.Join(t.TempDir(), "test.db"), nil)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer database.Close()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen fake control server: %v", err)
+	}
+	defer listener.Close()
+	_, portText, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatalf("split listener addr: %v", err)
+	}
+	var port int
+	if _, err := fmt.Sscanf(portText, "%d", &port); err != nil {
+		t.Fatalf("parse listener port: %v", err)
+	}
+
+	connection, err := db.CreateServerConnection(ctx, database, db.CreateServerConnectionParams{
+		Name:         "server-stopped-at-auth",
+		ServerHost:   "127.0.0.1",
+		ServerPort:   port,
+		DataPort:     port + 1,
+		ClientSecret: "xiaoliang_client_secret",
+		AutoStart:    true,
+	})
+	if err != nil {
+		t.Fatalf("create server connection: %v", err)
+	}
+
+	serverDone := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			serverDone <- fmt.Errorf("accept: %w", err)
+			return
+		}
+		defer conn.Close()
+		message, err := protocol.ReadMessage(conn)
+		if err != nil {
+			serverDone <- fmt.Errorf("read auth: %w", err)
+			return
+		}
+		if message.Type != protocol.TypeAuthRequest {
+			serverDone <- fmt.Errorf("message type=%s want %s", message.Type, protocol.TypeAuthRequest)
+			return
+		}
+		if err := protocol.WriteMessage(conn, protocol.NewErrorMessage(message.RequestID, protocol.CodeConflict, serverTunnelStoppedError)); err != nil {
+			serverDone <- fmt.Errorf("write stopped error: %w", err)
+			return
+		}
+		serverDone <- nil
+	}()
+
+	manager := NewManagerWithOptions(config.Default(), database, nil, Options{
+		DialTimeout:       200 * time.Millisecond,
+		ReconnectInterval: time.Second,
+	})
+	runCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		manager.runConnection(runCtx, connection)
+	}()
+
+	waitForConnectionError(t, database, connection.ID, serverTunnelStoppedError)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for connection worker")
+	}
+	select {
+	case err := <-serverDone:
+		if err != nil {
+			t.Fatalf("fake server failed: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for fake server")
+	}
+}
+
 func TestManagerLocalizesProtocolAuthErrors(t *testing.T) {
 	if got := localizeProtocolError(protocol.ProtocolError{Code: protocol.CodeUnauthorized, Message: "unauthorized"}); got != "秘钥错误" {
 		t.Fatalf("unauthorized localized to %q", got)
@@ -274,4 +415,29 @@ func TestManagerLocalizesProtocolAuthErrors(t *testing.T) {
 	if got := localizeProtocolError(protocol.ProtocolError{Code: protocol.CodeConflict, Message: "该连接正在占用，不得连接"}); got != "该连接正在占用，不得连接" {
 		t.Fatalf("conflict localized to %q", got)
 	}
+	if got := localizeProtocolError(protocol.ProtocolError{Code: protocol.CodeConflict, Message: serverTunnelStoppedError}); got != serverTunnelStoppedError {
+		t.Fatalf("stopped tunnel localized to %q", got)
+	}
+}
+
+func waitForConnectionError(t *testing.T, database *sql.DB, id int64, want string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		var status model.ServerConnectionStatus
+		var lastError string
+		err := database.QueryRowContext(context.Background(), "SELECT status, COALESCE(last_error, '') FROM tunnel_connections WHERE id = ?", id).Scan(&status, &lastError)
+		if err != nil {
+			t.Fatalf("query server connection: %v", err)
+		}
+		if status == model.ServerConnectionStatusError && lastError == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	stored, err := db.GetServerConnectionByID(context.Background(), database, id)
+	if err != nil {
+		t.Fatalf("get server connection: %v", err)
+	}
+	t.Fatalf("connection status=%s last_error=%q want error %q", stored.Status, stored.LastError, want)
 }

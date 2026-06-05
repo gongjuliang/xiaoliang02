@@ -47,6 +47,7 @@ func TestServerTunnelForwardsPublicTCPThroughBoundDataConnection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create tunnel: %v", err)
 	}
+	markTunnelConnectable(t, ctx, database, tunnel.ID)
 
 	controlPort := freeTCPPort(t)
 	dataPort := freeTCPPort(t)
@@ -188,6 +189,7 @@ func TestServerClosesPublicConnectionWhenClientSendsDataClose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create tunnel: %v", err)
 	}
+	markTunnelConnectable(t, ctx, database, tunnel.ID)
 
 	controlPort := freeTCPPort(t)
 	dataPort := freeTCPPort(t)
@@ -294,6 +296,7 @@ func TestServerStopTunnelSendsDataCloseForActiveConnection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create tunnel: %v", err)
 	}
+	markTunnelConnectable(t, ctx, database, tunnel.ID)
 
 	controlPort := freeTCPPort(t)
 	dataPort := freeTCPPort(t)

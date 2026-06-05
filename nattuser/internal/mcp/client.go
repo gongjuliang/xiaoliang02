@@ -73,7 +73,6 @@ type localTunnelStatus struct {
 	ServerPort         int                          `json:"server_port"`
 	DataPort           int                          `json:"data_port"`
 	RemotePort         int                          `json:"remote_port"`
-	UseTLS             bool                         `json:"use_tls"`
 	Status             model.ServerConnectionStatus `json:"status"`
 	LastError          string                       `json:"last_error"`
 	UpdatedAt          string                       `json:"updated_at"`
@@ -207,7 +206,6 @@ func (h *clientHandler) listTunnels(c *gin.Context, raw json.RawMessage) {
 			ServerPort:         connection.ServerPort,
 			DataPort:           connection.DataPort,
 			RemotePort:         connection.RemotePort,
-			UseTLS:             connection.UseTLS,
 			Status:             connection.Status,
 			LastError:          connection.LastError,
 			UpdatedAt:          connection.UpdatedAt,

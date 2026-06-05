@@ -16,6 +16,8 @@ const (
 	LegacyYAMLPath = "config/config.yaml"
 )
 
+var ErrDefaultConfigMissing = errors.New("default config missing")
+
 type Config struct {
 	App      AppConfig      `yaml:"app" json:"app"`
 	HTTP     HTTPConfig     `yaml:"http" json:"http"`
@@ -62,17 +64,10 @@ type AuthConfig struct {
 }
 
 type ProtocolConfig struct {
-	ControlHost string    `yaml:"control_host" json:"control_host"`
-	ControlPort int       `yaml:"control_port" json:"control_port"`
-	DataHost    string    `yaml:"data_host" json:"data_host"`
-	DataPort    int       `yaml:"data_port" json:"data_port"`
-	TLS         TLSConfig `yaml:"tls" json:"tls"`
-}
-
-type TLSConfig struct {
-	Enabled  bool   `yaml:"enabled" json:"enabled"`
-	CertFile string `yaml:"cert_file" json:"cert_file"`
-	KeyFile  string `yaml:"key_file" json:"key_file"`
+	ControlHost string `yaml:"control_host" json:"control_host"`
+	ControlPort int    `yaml:"control_port" json:"control_port"`
+	DataHost    string `yaml:"data_host" json:"data_host"`
+	DataPort    int    `yaml:"data_port" json:"data_port"`
 }
 
 type TunnelConfig struct {
@@ -114,15 +109,15 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// Load("") intentionally prefers the new JSON config, but falls back to the
-// legacy YAML file so existing deployments keep starting during migration.
+// Load("") is the normal startup path and requires config/config.json. YAML is
+// still supported when an operator explicitly passes a .yaml/.yml config path.
 func defaultConfigPath() (string, error) {
 	if _, err := os.Stat(DefaultPath); err == nil {
 		return DefaultPath, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("stat config %s: %w", DefaultPath, err)
 	}
-	return LegacyYAMLPath, nil
+	return "", ErrDefaultConfigMissing
 }
 
 func parseConfig(path string, content []byte, cfg *Config) error {
@@ -145,7 +140,7 @@ func Default() *Config {
 		},
 		HTTP: HTTPConfig{
 			Host:                   "0.0.0.0",
-			Port:                   8080,
+			Port:                   25510,
 			ReadTimeoutSeconds:     10,
 			WriteTimeoutSeconds:    10,
 			IdleTimeoutSeconds:     60,
@@ -168,13 +163,13 @@ func Default() *Config {
 		},
 		Protocol: ProtocolConfig{
 			ControlHost: "0.0.0.0",
-			ControlPort: 7000,
+			ControlPort: 25511,
 			DataHost:    "0.0.0.0",
-			DataPort:    7001,
+			DataPort:    25512,
 		},
 		Tunnel: TunnelConfig{
-			RemotePortMin: 10000,
-			RemotePortMax: 60000,
+			RemotePortMin: 0,
+			RemotePortMax: 65535,
 		},
 	}
 }
@@ -216,11 +211,8 @@ func (c *Config) Validate() error {
 	if c.Auth.LoginRateLimitPerMinute <= 0 {
 		return fmt.Errorf("auth.login_rate_limit_per_minute must be greater than 0")
 	}
-	if c.Tunnel.RemotePortMin < 1 || c.Tunnel.RemotePortMax > 65535 || c.Tunnel.RemotePortMin > c.Tunnel.RemotePortMax {
+	if c.Tunnel.RemotePortMin < 0 || c.Tunnel.RemotePortMax > 65535 || c.Tunnel.RemotePortMin > c.Tunnel.RemotePortMax {
 		return fmt.Errorf("tunnel remote port range is invalid")
-	}
-	if c.Protocol.TLS.Enabled && (c.Protocol.TLS.CertFile == "" || c.Protocol.TLS.KeyFile == "") {
-		return fmt.Errorf("protocol TLS requires cert_file and key_file")
 	}
 	return nil
 }

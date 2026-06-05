@@ -80,6 +80,7 @@ func (h *OpsHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.PUT("/config", h.updateConfig)
 	group.GET("/mcp-config", h.getMCPConfig)
 	group.PUT("/mcp-config", h.updateMCPConfig)
+	group.GET("/mcp-config/reveal-token", h.revealMCPToken)
 	group.POST("/mcp-config/rotate-token", h.rotateMCPToken)
 }
 
@@ -248,7 +249,6 @@ func (h *OpsHandler) getConfig(c *gin.Context) {
 				"server_host":  h.cfg.ServerDefaults.ServerHost,
 				"control_port": h.cfg.ServerDefaults.ControlPort,
 				"data_port":    h.cfg.ServerDefaults.DataPort,
-				"use_tls":      h.cfg.ServerDefaults.UseTLS,
 			},
 		},
 		"persisted_settings": settings,
@@ -318,13 +318,6 @@ func (h *OpsHandler) applyConfigSetting(key string, value string) (configUpdateR
 		}
 		h.cfg.ServerDefaults.DataPort = port
 		return configUpdateResult{Key: key, Value: strconv.Itoa(port), HotReloaded: true, RestartRequired: false}, nil
-	case "server_defaults.use_tls":
-		parsed, err := strconv.ParseBool(value)
-		if err != nil {
-			return configUpdateResult{}, fmt.Errorf("server_defaults.use_tls 必须是 true 或 false")
-		}
-		h.cfg.ServerDefaults.UseTLS = parsed
-		return configUpdateResult{Key: key, Value: strconv.FormatBool(parsed), HotReloaded: true, RestartRequired: false}, nil
 	case "http.host", "http.port",
 		"auth.access_token_ttl_minutes", "auth.refresh_token_ttl_minutes", "auth.login_rate_limit_per_minute":
 		return configUpdateResult{}, fmt.Errorf("该配置不支持热更新，请修改配置文件后重启服务")
@@ -382,7 +375,6 @@ func editableConfigKeys() []gin.H {
 		{"key": "server_defaults.server_host", "hot_reload": true},
 		{"key": "server_defaults.control_port", "hot_reload": true},
 		{"key": "server_defaults.data_port", "hot_reload": true},
-		{"key": "server_defaults.use_tls", "hot_reload": true},
 	}
 }
 
@@ -402,7 +394,7 @@ func validateRestartSetting(key string, value string) error {
 	case "auth.access_token_ttl_minutes", "auth.refresh_token_ttl_minutes", "auth.login_rate_limit_per_minute":
 		parsed, err := strconv.Atoi(value)
 		if err != nil || parsed <= 0 {
-			return fmt.Errorf("%s must be greater than 0", key)
+			return fmt.Errorf("%s 必须大于 0", key)
 		}
 	}
 	return nil
@@ -433,31 +425,34 @@ func (h *OpsHandler) updateMCPConfig(c *gin.Context) {
 	if !bindJSONOrFail(c, &req, "MCP 配置参数不正确") {
 		return
 	}
-	token := strings.TrimSpace(req.AccessToken)
-	if req.Enabled && token == "" {
-		existing, err := db.GetSetting(c.Request.Context(), h.database, "mcp.access_token")
-		if err != nil && !errors.Is(err, db.ErrNotFound) {
-			h.writeError(c, err, "load mcp token failed")
-			return
-		}
-		token = strings.TrimSpace(existing)
+	if strings.TrimSpace(req.AccessToken) != "" {
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "MCP Key 由系统生成，不允许自定义")
+		return
 	}
-	if req.Enabled && token == "" {
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "启用 MCP 时 access_token 为必填项")
+	token, ok := h.ensureMCPToken(c, req.Enabled)
+	if !ok {
 		return
 	}
 	if err := db.UpsertSetting(c.Request.Context(), h.database, "mcp.enabled", strconv.FormatBool(req.Enabled)); err != nil {
 		h.writeError(c, err, "save mcp enabled failed")
 		return
 	}
-	if strings.TrimSpace(req.AccessToken) != "" {
-		if err := db.UpsertSetting(c.Request.Context(), h.database, "mcp.access_token", token); err != nil {
-			h.writeError(c, err, "save mcp token failed")
-			return
-		}
-	}
 	_ = db.InsertAuditLog(c.Request.Context(), h.database, currentActor(c), "mcp_config_update", "mcp", "client", "updated mcp config", c.ClientIP())
 	OK(c, gin.H{"enabled": req.Enabled, "access_token_hint": auth.SecretHint(token), "has_access_token": token != ""})
+}
+
+func (h *OpsHandler) revealMCPToken(c *gin.Context) {
+	token, err := db.GetSetting(c.Request.Context(), h.database, "mcp.access_token")
+	if errors.Is(err, db.ErrNotFound) || strings.TrimSpace(token) == "" {
+		Fail(c, http.StatusNotFound, CodeNotFound, "MCP Key 尚未生成")
+		return
+	}
+	if err != nil {
+		h.writeError(c, err, "load mcp token failed")
+		return
+	}
+	_ = db.InsertAuditLog(c.Request.Context(), h.database, currentActor(c), "mcp_token_reveal", "mcp", "client", "revealed mcp token", c.ClientIP())
+	OK(c, gin.H{"access_token": token, "access_token_hint": auth.SecretHint(token)})
 }
 
 func (h *OpsHandler) rotateMCPToken(c *gin.Context) {
@@ -472,4 +467,26 @@ func (h *OpsHandler) rotateMCPToken(c *gin.Context) {
 	}
 	_ = db.InsertAuditLog(c.Request.Context(), h.database, currentActor(c), "mcp_token_rotate", "mcp", "client", "rotated mcp token", c.ClientIP())
 	OK(c, gin.H{"access_token": token, "access_token_hint": auth.SecretHint(token)})
+}
+
+func (h *OpsHandler) ensureMCPToken(c *gin.Context, enabled bool) (string, bool) {
+	existing, err := db.GetSetting(c.Request.Context(), h.database, "mcp.access_token")
+	if err != nil && !errors.Is(err, db.ErrNotFound) {
+		h.writeError(c, err, "load mcp token failed")
+		return "", false
+	}
+	token := strings.TrimSpace(existing)
+	if !enabled || token != "" {
+		return token, true
+	}
+	token, err = auth.GenerateClientSecret()
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, CodeInternalError, "生成 MCP Key 失败")
+		return "", false
+	}
+	if err := db.UpsertSetting(c.Request.Context(), h.database, "mcp.access_token", token); err != nil {
+		h.writeError(c, err, "save mcp token failed")
+		return "", false
+	}
+	return token, true
 }

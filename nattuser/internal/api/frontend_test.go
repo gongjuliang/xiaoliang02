@@ -81,7 +81,7 @@ func TestRouterServesEmbeddedFrontend(t *testing.T) {
 
 	loginPage := httptest.NewRecorder()
 	router.ServeHTTP(loginPage, httptest.NewRequest(http.MethodGet, "/login.html", nil))
-	for _, want := range []string{"验证码", "captchaQuestion", "captchaRefresh", "captcha_code"} {
+	for _, want := range []string{"验证码", "captchaImage", "captchaRefresh", "captcha_code"} {
 		if !strings.Contains(loginPage.Body.String(), want) {
 			t.Fatalf("login page missing captcha marker %q", want)
 		}
@@ -104,7 +104,7 @@ func TestRouterServesEmbeddedFrontend(t *testing.T) {
 	if js.Code != http.StatusOK {
 		t.Fatalf("js status=%d body=%s", js.Code, js.Body.String())
 	}
-	for _, want := range []string{"request: request", "escapeHtml: escapeHtml", "badge: badge", "logout: logout", "captcha_id", "loadCaptcha"} {
+	for _, want := range []string{"request: request", "escapeHtml: escapeHtml", "badge: badge", "logout: logout", "captcha_id", "image_url", "loadCaptcha"} {
 		if !strings.Contains(js.Body.String(), want) {
 			t.Fatalf("app js missing %q", want)
 		}

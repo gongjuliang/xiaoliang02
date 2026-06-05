@@ -2,7 +2,6 @@ package control
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -53,7 +52,7 @@ func (m *Manager) forwardDataConnection(ctx context.Context, connection model.Se
 		return fmt.Errorf("send data bind: %w", err)
 	}
 
-	session := m.registerDataConnection(command.ConnectionID, dataConn)
+	session := m.registerDataConnection(connection.ID, command.ConnectionID, dataConn)
 	defer m.removeDataConnection(command.ConnectionID, session)
 	defer session.close()
 
@@ -103,10 +102,11 @@ func (m *Manager) resolveLocalDataOpen(ctx context.Context, connection model.Ser
 	return resolved, nil
 }
 
-func (m *Manager) registerDataConnection(connectionID string, dataConn net.Conn) *activeDataConnection {
+func (m *Manager) registerDataConnection(serverConnectionID int64, connectionID string, dataConn net.Conn) *activeDataConnection {
 	session := &activeDataConnection{
-		connectionID: connectionID,
-		dataConn:     dataConn,
+		connectionID:       connectionID,
+		serverConnectionID: serverConnectionID,
+		dataConn:           dataConn,
 	}
 	m.dataMu.Lock()
 	m.data[connectionID] = session
@@ -138,6 +138,21 @@ func (m *Manager) closeDataConnection(connectionID string) error {
 		session.close()
 	}
 	return nil
+}
+
+func (m *Manager) closeDataConnectionsForServer(serverConnectionID int64) {
+	var sessions []*activeDataConnection
+	m.dataMu.Lock()
+	for connectionID, session := range m.data {
+		if session.serverConnectionID == serverConnectionID {
+			sessions = append(sessions, session)
+			delete(m.data, connectionID)
+		}
+	}
+	m.dataMu.Unlock()
+	for _, session := range sessions {
+		session.close()
+	}
 }
 
 func (c *activeDataConnection) setLocalConn(conn net.Conn) {
@@ -181,26 +196,7 @@ func (m *Manager) dialData(ctx context.Context, connection model.ServerConnectio
 	}
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	dialer := &net.Dialer{Timeout: m.options.DialTimeout}
-	if !connection.UseTLS {
-		return dialer.DialContext(ctx, "tcp", addr)
-	}
-
-	rawConn, err := dialer.DialContext(ctx, "tcp", addr)
-	if err != nil {
-		return nil, err
-	}
-	tlsConn := tls.Client(rawConn, &tls.Config{
-		ServerName:         connection.ServerHost,
-		MinVersion:         tls.VersionTLS12,
-		InsecureSkipVerify: true,
-	})
-	handshakeCtx, cancel := context.WithTimeout(ctx, m.options.DialTimeout)
-	defer cancel()
-	if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
-		_ = rawConn.Close()
-		return nil, err
-	}
-	return tlsConn, nil
+	return dialer.DialContext(ctx, "tcp", addr)
 }
 
 func (m *Manager) dialLocal(ctx context.Context, dataOpen protocol.DataOpen) (net.Conn, error) {

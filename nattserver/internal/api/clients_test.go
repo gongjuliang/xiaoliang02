@@ -40,7 +40,7 @@ func TestTunnelKeyManagementFlow(t *testing.T) {
 	if created.Tunnel.ID == 0 || created.Secret == "" {
 		t.Fatalf("unexpected create response: %+v", created)
 	}
-	if !strings.HasPrefix(created.Secret, "natt_") {
+	if !strings.HasPrefix(created.Secret, "xiaoliang_") {
 		t.Fatalf("unexpected tunnel secret prefix: %s", created.Secret)
 	}
 	if strings.Contains(createResp.Body.String(), "secret_hash") {
@@ -119,9 +119,10 @@ func setupAuthenticatedServerRouterWithRuntime(t *testing.T, runtime Runtime) (*
 	if err := db.UpsertSetting(context.Background(), database, "mcp.access_token", cfg.MCP.AccessToken); err != nil {
 		t.Fatalf("set mcp token: %v", err)
 	}
+	seedTestAdmin(t, database)
 	router := NewRouterWithRuntime(cfg, database, nil, runtime)
 	publicKey := fetchPublicKey(t, router, "/api/server/v1/auth/sm2-public-key")
-	encryptedPassword := encryptForPublicKey(t, publicKey, "admin123456")
+	encryptedPassword := encryptForPublicKey(t, publicKey, testAdminPassword)
 	tokens := login(t, router, "/api/server/v1/auth/login", encryptedPassword)
 	return router, database, tokens
 }

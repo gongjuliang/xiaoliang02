@@ -106,6 +106,14 @@ func TestTunnelCreateRejectsPortOutsideConfiguredRange(t *testing.T) {
 	router, database, tokens := setupAuthenticatedServerRouter(t)
 	defer database.Close()
 
+	updateResp := authorizedJSON(t, router, http.MethodPut, "/api/server/v1/config", tokens.AccessToken, map[string]any{
+		"settings": map[string]string{
+			"tunnel.remote_port_min": "20000",
+			"tunnel.remote_port_max": "20010",
+		},
+	})
+	assertResponseCode(t, updateResp, CodeOK)
+
 	resp := authorizedJSONAllowStatus(t, router, http.MethodPost, "/api/server/v1/tunnels", tokens.AccessToken, map[string]any{
 		"name":        "bad-port",
 		"remote_port": 9999,

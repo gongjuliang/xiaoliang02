@@ -233,14 +233,14 @@ func (s *Server) handleDataConn(ctx context.Context, conn net.Conn) {
 	}
 	_ = conn.SetReadDeadline(time.Time{})
 	if message.Type != protocol.TypeDataBind {
-		_ = writeWithDeadline(conn, protocol.NewErrorMessage(message.RequestID, protocol.CodeBadRequest, "first data message must be data_bind"))
+		_ = writeWithDeadline(conn, protocol.NewErrorMessage(message.RequestID, protocol.CodeBadRequest, "首条数据消息必须是 data_bind"))
 		return
 	}
 	// A data socket is accepted only when it authenticates and matches a pending
 	// connection_id/tunnel_id that was created by handlePublicConn.
 	bind, err := protocol.DecodePayload[protocol.DataBind](message)
 	if err != nil || strings.TrimSpace(bind.ClientSecret) == "" {
-		_ = writeWithDeadline(conn, protocol.NewErrorMessage(message.RequestID, protocol.CodeBadRequest, "invalid data_bind payload"))
+		_ = writeWithDeadline(conn, protocol.NewErrorMessage(message.RequestID, protocol.CodeBadRequest, "data_bind 参数不正确"))
 		return
 	}
 	key, err := db.AuthenticateTunnelSecret(ctx, s.database, bind.ClientSecret)
@@ -250,7 +250,7 @@ func (s *Server) handleDataConn(ctx context.Context, conn net.Conn) {
 	}
 	pending := s.getPending(message.ConnectionID)
 	if pending == nil || pending.tunnelID != key.TunnelID || pending.tunnelID != message.TunnelID {
-		_ = writeWithDeadline(conn, protocol.NewErrorMessage(message.RequestID, protocol.CodeBadRequest, "data connection is not expected"))
+		_ = writeWithDeadline(conn, protocol.NewErrorMessage(message.RequestID, protocol.CodeBadRequest, "数据连接不在预期范围内"))
 		return
 	}
 

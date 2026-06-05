@@ -2,7 +2,6 @@ package control
 
 import (
 	"context"
-	"crypto/tls"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -23,6 +22,8 @@ const (
 	writeTimeout      = 10 * time.Second
 	authTimeout       = 10 * time.Second
 )
+
+const tunnelStoppedByServerMessage = "服务端暂停了隧道连接，请通知服务端人员启动隧道。"
 
 type Server struct {
 	cfg       config.ProtocolConfig
@@ -156,7 +157,7 @@ func (s *Server) SendToClient(tunnelID int64, message protocol.Message) error {
 	client := s.active[tunnelID]
 	s.mu.Unlock()
 	if client == nil {
-		return fmt.Errorf("tunnel %d is not online", tunnelID)
+		return fmt.Errorf("隧道 %d 未在线", tunnelID)
 	}
 	return client.write(message)
 }
@@ -178,33 +179,19 @@ func (s *Server) DisconnectTunnel(tunnelID int64) {
 	if err := db.MarkTunnelKeyOffline(ctx, s.database, tunnelID); err != nil {
 		s.logError("mark disconnected tunnel offline failed tunnel_id=%d: %v", tunnelID, err)
 	}
-	if err := db.MarkTunnelUnavailable(ctx, s.database, tunnelID, "tunnel disconnected"); err != nil {
+	if err := db.MarkTunnelUnavailable(ctx, s.database, tunnelID, "隧道连接已断开"); err != nil {
 		s.logError("mark disconnected tunnel unavailable failed tunnel_id=%d: %v", tunnelID, err)
 	}
 }
 
 func (s *Server) listenControl() (net.Listener, error) {
 	addr := fmt.Sprintf("%s:%d", hostOrDefault(s.cfg.ControlHost), s.cfg.ControlPort)
-	if !s.cfg.TLS.Enabled {
-		return net.Listen("tcp", addr)
-	}
-	cert, err := tls.LoadX509KeyPair(s.cfg.TLS.CertFile, s.cfg.TLS.KeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("load control TLS certificate: %w", err)
-	}
-	return tls.Listen("tcp", addr, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12})
+	return net.Listen("tcp", addr)
 }
 
 func (s *Server) listenData() (net.Listener, error) {
 	addr := fmt.Sprintf("%s:%d", hostOrDefault(s.cfg.DataHost), s.cfg.DataPort)
-	if !s.cfg.TLS.Enabled {
-		return net.Listen("tcp", addr)
-	}
-	cert, err := tls.LoadX509KeyPair(s.cfg.TLS.CertFile, s.cfg.TLS.KeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("load data TLS certificate: %w", err)
-	}
-	return tls.Listen("tcp", addr, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12})
+	return net.Listen("tcp", addr)
 }
 
 func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
@@ -219,13 +206,13 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 	if first.Type != protocol.TypeAuthRequest {
-		_ = writeWithDeadline(conn, protocol.NewErrorMessage(first.RequestID, protocol.CodeBadRequest, "first message must be auth_request"))
+		_ = writeWithDeadline(conn, protocol.NewErrorMessage(first.RequestID, protocol.CodeBadRequest, "首条消息必须是 auth_request"))
 		return
 	}
 
 	authReq, err := protocol.DecodePayload[protocol.AuthRequest](first)
 	if err != nil || authReq.ClientSecret == "" {
-		_ = writeWithDeadline(conn, protocol.NewErrorMessage(first.RequestID, protocol.CodeBadRequest, "invalid auth_request payload"))
+		_ = writeWithDeadline(conn, protocol.NewErrorMessage(first.RequestID, protocol.CodeBadRequest, "auth_request 参数不正确"))
 		return
 	}
 	key, err := db.AuthenticateTunnelSecret(ctx, s.database, authReq.ClientSecret)
@@ -236,6 +223,10 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	}
 
 	tunnel, tunnelErr := db.GetTunnelByID(ctx, s.database, key.TunnelID)
+	if tunnelErr == nil && tunnel.Status == "stopped" {
+		_ = writeWithDeadline(conn, protocol.NewErrorMessage(first.RequestID, protocol.CodeConflict, tunnelStoppedByServerMessage))
+		return
+	}
 	remoteIP, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
 	if remoteIP == "" {
 		remoteIP = conn.RemoteAddr().String()
@@ -311,7 +302,7 @@ func (s *Server) handleMessage(ctx context.Context, client *clientConn, message 
 		return nil
 	case protocol.TypeDataClose:
 		if strings.TrimSpace(message.ConnectionID) == "" {
-			return fmt.Errorf("data_close connection_id is required")
+			return fmt.Errorf("data_close 缺少 connection_id")
 		}
 		if _, err := protocol.DecodePayload[protocol.DataClose](message); err != nil {
 			return err
@@ -321,7 +312,7 @@ func (s *Server) handleMessage(ctx context.Context, client *clientConn, message 
 		s.closeDataConnection(message.ConnectionID)
 		return nil
 	default:
-		return fmt.Errorf("unsupported message type: %s", message.Type)
+		return fmt.Errorf("不支持的消息类型：%s", message.Type)
 	}
 }
 
@@ -347,7 +338,7 @@ func (s *Server) unregister(tunnelID int64, client *clientConn) {
 	if err := db.MarkTunnelKeyOffline(ctx, s.database, tunnelID); err != nil {
 		s.logError("mark tunnel offline failed tunnel_id=%d: %v", tunnelID, err)
 	}
-	if err := db.MarkTunnelUnavailable(ctx, s.database, tunnelID, "tunnel control connection offline"); err != nil {
+	if err := db.MarkTunnelUnavailable(ctx, s.database, tunnelID, "隧道控制连接已离线"); err != nil {
 		s.logError("mark tunnel unavailable failed tunnel_id=%d: %v", tunnelID, err)
 	}
 	s.stopTunnelRuntime(tunnelID)

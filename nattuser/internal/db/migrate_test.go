@@ -5,12 +5,13 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"nattuser/internal/auth"
 	"nattuser/internal/model"
 )
 
-func TestOpenRunsMigrationsAndSeedsAdmin(t *testing.T) {
+func TestOpenRunsMigrationsWithoutDefaultAdmin(t *testing.T) {
 	database, err := Open(context.Background(), ":memory:", nil)
 	if err != nil {
 		t.Fatalf("open database: %v", err)
@@ -34,17 +35,12 @@ WHERE type = 'table' AND name = ?;`, table).Scan(&name)
 		}
 	}
 
-	var username string
-	var passwordHash string
-	err = database.QueryRow("SELECT username, password_hash FROM users WHERE role = 'admin' LIMIT 1").Scan(&username, &passwordHash)
+	count, err := CountUsers(context.Background(), database)
 	if err != nil {
-		t.Fatalf("default admin was not created: %v", err)
+		t.Fatalf("count users: %v", err)
 	}
-	if username != defaultAdminUsername {
-		t.Fatalf("unexpected default admin username: %s", username)
-	}
-	if !auth.CheckPassword(defaultAdminPassword, passwordHash) {
-		t.Fatal("default admin password hash is invalid")
+	if count != 0 {
+		t.Fatalf("user count=%d want 0", count)
 	}
 }
 
@@ -66,7 +62,6 @@ func TestDataPersistsAfterDatabaseReopen(t *testing.T) {
 		ServerHost:   "127.0.0.1",
 		ServerPort:   7000,
 		DataPort:     7001,
-		UseTLS:       true,
 		ClientSecret: "natt_client_secret",
 		AutoStart:    true,
 		Remark:       "persisted server connection",
@@ -74,7 +69,7 @@ func TestDataPersistsAfterDatabaseReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create server connection: %v", err)
 	}
-	if err := UpsertSetting(ctx, database, "server_defaults.use_tls", "true"); err != nil {
+	if err := UpsertSetting(ctx, database, "log.level", "debug"); err != nil {
 		t.Fatalf("upsert setting: %v", err)
 	}
 	if err := InsertAuditLog(ctx, database, "admin", "persist_test", "server_connection", "1", "persisted audit", "127.0.0.1"); err != nil {
@@ -102,7 +97,6 @@ func TestDataPersistsAfterDatabaseReopen(t *testing.T) {
 		storedConnection.ServerHost != "127.0.0.1" ||
 		storedConnection.ServerPort != 7000 ||
 		storedConnection.DataPort != 7001 ||
-		!storedConnection.UseTLS ||
 		!storedConnection.AutoStart ||
 		storedConnection.Remark != "persisted server connection" {
 		t.Fatalf("unexpected persisted server connection: %+v", storedConnection)
@@ -111,7 +105,7 @@ func TestDataPersistsAfterDatabaseReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list persisted settings: %v", err)
 	}
-	if settingValue(settings, "server_defaults.use_tls") != "true" {
+	if settingValue(settings, "log.level") != "debug" {
 		t.Fatalf("persisted setting not found: %+v", settings)
 	}
 	logs, total, err := ListAuditLogs(ctx, reopened, 10, 0)
@@ -152,6 +146,36 @@ VALUES('admin', 'legacy_audit', 'server_connection', '1', 'from sqlite', '127.0.
 	}
 	if total != 1 || logs[0].Action != "legacy_audit" || logs[0].Content != "from sqlite" {
 		t.Fatalf("unexpected migrated audit logs total=%d logs=%+v", total, logs)
+	}
+}
+
+func TestResetLegacyPasswordHashesDoesNotBlockSingleSQLiteConnection(t *testing.T) {
+	ctx := context.Background()
+	database, err := Open(ctx, filepath.Join(t.TempDir(), "test.db"), nil)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer database.Close()
+
+	if _, err := database.ExecContext(ctx, `
+INSERT INTO users(username, password_hash, role)
+VALUES('legacy-admin', '$2a$10$legacy', 'admin');`); err != nil {
+		t.Fatalf("seed legacy password hash: %v", err)
+	}
+	t.Setenv("NATT_USER_ADMIN_PASSWORD", "Reset1234")
+
+	shortCtx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	defer cancel()
+	if err := resetLegacyPasswordHashes(shortCtx, database, "NATT_USER_ADMIN_PASSWORD", nil); err != nil {
+		t.Fatalf("reset legacy password hash: %v", err)
+	}
+
+	var hash string
+	if err := database.QueryRowContext(ctx, "SELECT password_hash FROM users WHERE username = ?", "legacy-admin").Scan(&hash); err != nil {
+		t.Fatalf("query migrated password hash: %v", err)
+	}
+	if !auth.CheckPassword("Reset1234", hash) {
+		t.Fatal("migrated admin password hash is invalid")
 	}
 }
 

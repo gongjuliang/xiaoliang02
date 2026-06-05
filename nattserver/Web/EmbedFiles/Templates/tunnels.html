@@ -45,8 +45,8 @@ if (NATT.requireAuth()) {
     function renderDetailText(value) {
         var text = String(value || "");
         if (!$.trim(text)) return "-";
-        if (text.length <= 20) return NATT.escapeHtml(text);
-        return NATT.escapeHtml(text.slice(0, 20)) + '...' +
+        if (text.length <= 10) return NATT.escapeHtml(text);
+        return NATT.escapeHtml(text.slice(0, 10)) + '...' +
             '<button type="button" class="layui-btn layui-btn-primary layui-btn-xs detail-more" data-act="show-detail" data-detail="' + NATT.escapeHtml(text) + '">详情</button>';
     }
     function showTextDialog(title, text, className) {

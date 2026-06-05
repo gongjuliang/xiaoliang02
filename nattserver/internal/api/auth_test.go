@@ -9,7 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
-	"fmt"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -19,10 +19,16 @@ import (
 	"nattserver/internal/auth"
 	"nattserver/internal/config"
 	"nattserver/internal/db"
+	"nattserver/internal/model"
 
 	"github.com/emmansun/gmsm/sm2"
 	"github.com/emmansun/gmsm/smx509"
 	"github.com/gin-gonic/gin"
+)
+
+const (
+	testAdminUsername = "test_admin"
+	testAdminPassword = "Admin1234"
 )
 
 func TestAuthFlow(t *testing.T) {
@@ -40,10 +46,11 @@ func TestAuthFlow(t *testing.T) {
 		t.Fatalf("open database: %v", err)
 	}
 	defer database.Close()
+	seedTestAdmin(t, database)
 
 	router := NewRouter(cfg, database, nil)
 	publicKey := fetchPublicKey(t, router, "/api/server/v1/auth/sm2-public-key")
-	encryptedPassword := encryptForPublicKey(t, publicKey, "admin123456")
+	encryptedPassword := encryptForPublicKey(t, publicKey, testAdminPassword)
 
 	tokens := login(t, router, "/api/server/v1/auth/login", encryptedPassword)
 	if tokens.AccessToken == "" || tokens.RefreshToken == "" {
@@ -66,7 +73,7 @@ func TestAuthSecurityIntegration(t *testing.T) {
 			cfg.App.Environment = "development"
 		})
 
-		rec := loginWithStatus(t, router, "/api/server/v1/auth/login", "admin", "admin123456")
+		rec := loginWithStatus(t, router, "/api/server/v1/auth/login", testAdminUsername, testAdminPassword)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("plaintext development login status=%d body=%s", rec.Code, rec.Body.String())
 		}
@@ -78,7 +85,7 @@ func TestAuthSecurityIntegration(t *testing.T) {
 			cfg.App.Environment = "production"
 		})
 
-		rec := loginWithStatus(t, router, "/api/server/v1/auth/login", "admin", "admin123456")
+		rec := loginWithStatus(t, router, "/api/server/v1/auth/login", testAdminUsername, testAdminPassword)
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("plaintext production login status=%d body=%s", rec.Code, rec.Body.String())
 		}
@@ -91,7 +98,7 @@ func TestAuthSecurityIntegration(t *testing.T) {
 			cfg.Auth.RefreshTokenTTLMinutes = 5
 		})
 
-		tokens := login(t, router, "/api/server/v1/auth/login", encryptForPublicKey(t, publicKey, "admin123456"))
+		tokens := login(t, router, "/api/server/v1/auth/login", encryptForPublicKey(t, publicKey, testAdminPassword))
 
 		rec := authMe(t, router, "/api/server/v1/auth/me", "Bearer "+tokens.AccessToken)
 		if rec.Code != http.StatusUnauthorized {
@@ -107,7 +114,7 @@ func TestAuthSecurityIntegration(t *testing.T) {
 
 	t.Run("protected endpoints require bearer access token", func(t *testing.T) {
 		router, _, publicKey := newAuthTestRouter(t, nil)
-		tokens := login(t, router, "/api/server/v1/auth/login", encryptForPublicKey(t, publicKey, "admin123456"))
+		tokens := login(t, router, "/api/server/v1/auth/login", encryptForPublicKey(t, publicKey, testAdminPassword))
 
 		for name, header := range map[string]string{
 			"missing":       "",
@@ -126,12 +133,12 @@ func TestAuthSecurityIntegration(t *testing.T) {
 		encryptedWrongPassword := encryptForPublicKey(t, publicKey, "wrong-password")
 
 		for i := 0; i < 10; i++ {
-			rec := loginWithStatus(t, router, "/api/server/v1/auth/login", "admin", encryptedWrongPassword)
+			rec := loginWithStatus(t, router, "/api/server/v1/auth/login", testAdminUsername, encryptedWrongPassword)
 			if rec.Code != http.StatusUnauthorized {
 				t.Fatalf("failed login #%d status=%d body=%s", i+1, rec.Code, rec.Body.String())
 			}
 		}
-		rec := loginWithStatus(t, router, "/api/server/v1/auth/login", "admin", encryptedWrongPassword)
+		rec := loginWithStatus(t, router, "/api/server/v1/auth/login", testAdminUsername, encryptedWrongPassword)
 		if rec.Code != http.StatusTooManyRequests {
 			t.Fatalf("banned login status=%d body=%s", rec.Code, rec.Body.String())
 		}
@@ -145,7 +152,7 @@ func TestAuthSecurityIntegration(t *testing.T) {
 			cfg.App.Environment = "development"
 		})
 
-		rec := loginWithStatusWithCaptcha(t, router, "/api/server/v1/auth/login", "admin", "admin123456", "missing", "0000")
+		rec := loginWithStatusWithCaptcha(t, router, "/api/server/v1/auth/login", testAdminUsername, testAdminPassword, "missing", "0000")
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("invalid captcha login status=%d body=%s", rec.Code, rec.Body.String())
 		}
@@ -172,6 +179,7 @@ func newAuthTestRouter(t *testing.T, configure func(*config.Config)) (http.Handl
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
+	seedTestAdmin(t, database)
 	t.Cleanup(func() {
 		if err := database.Close(); err != nil {
 			t.Fatalf("close database: %v", err)
@@ -181,6 +189,21 @@ func newAuthTestRouter(t *testing.T, configure func(*config.Config)) (http.Handl
 	router := NewRouter(cfg, database, nil)
 	publicKey := fetchPublicKey(t, router, "/api/server/v1/auth/sm2-public-key")
 	return router, database, publicKey
+}
+
+func seedTestAdmin(t *testing.T, database *sql.DB) {
+	t.Helper()
+	hash, err := auth.HashPassword(testAdminPassword)
+	if err != nil {
+		t.Fatalf("hash test admin password: %v", err)
+	}
+	if _, err := db.CreateUser(context.Background(), database, db.CreateUserParams{
+		Username:     testAdminUsername,
+		PasswordHash: hash,
+		Role:         model.UserRoleAdmin,
+	}); err != nil {
+		t.Fatalf("create test admin: %v", err)
+	}
 }
 
 func fetchPublicKey(t *testing.T, router http.Handler, path string) string {
@@ -232,7 +255,7 @@ func encryptForPublicKey(t *testing.T, publicKeyPEM string, plaintext string) st
 
 func login(t *testing.T, router http.Handler, path string, encryptedPassword string) auth.TokenPair {
 	t.Helper()
-	rec := loginWithStatus(t, router, path, "admin", encryptedPassword)
+	rec := loginWithStatus(t, router, path, testAdminUsername, encryptedPassword)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("login status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -253,7 +276,7 @@ func login(t *testing.T, router http.Handler, path string, encryptedPassword str
 func loginWithStatus(t *testing.T, router http.Handler, path string, username string, encryptedPassword string) *httptest.ResponseRecorder {
 	t.Helper()
 	captcha := fetchCaptcha(t, router, strings.TrimSuffix(path, "/login")+"/captcha")
-	return loginWithStatusWithCaptcha(t, router, path, username, encryptedPassword, captcha.ID, solveCaptcha(t, captcha.Question))
+	return loginWithStatusWithCaptcha(t, router, path, username, encryptedPassword, captcha.ID, solveCaptcha(t, captcha.ID))
 }
 
 func loginWithStatusWithCaptcha(t *testing.T, router http.Handler, path string, username string, encryptedPassword string, captchaID string, captchaCode string) *httptest.ResponseRecorder {
@@ -276,7 +299,7 @@ func loginWithStatusWithCaptcha(t *testing.T, router http.Handler, path string, 
 
 type testCaptcha struct {
 	ID       string `json:"captcha_id"`
-	Question string `json:"question"`
+	ImageURL string `json:"image_url"`
 }
 
 func fetchCaptcha(t *testing.T, router http.Handler, path string) testCaptcha {
@@ -297,19 +320,33 @@ func fetchCaptcha(t *testing.T, router http.Handler, path string) testCaptcha {
 	if err := json.Unmarshal(resp.Data, &captcha); err != nil {
 		t.Fatalf("decode captcha data: %v", err)
 	}
-	if captcha.ID == "" || captcha.Question == "" {
+	if captcha.ID == "" || captcha.ImageURL == "" {
 		t.Fatalf("captcha missing data: %+v", captcha)
+	}
+	if strings.Contains(string(resp.Data), "question") {
+		t.Fatalf("captcha response must not expose question: %s", string(resp.Data))
+	}
+	imageRec := httptest.NewRecorder()
+	router.ServeHTTP(imageRec, httptest.NewRequest(http.MethodGet, captcha.ImageURL, nil))
+	if imageRec.Code != http.StatusOK {
+		t.Fatalf("captcha image status=%d body=%s", imageRec.Code, imageRec.Body.String())
+	}
+	if got := imageRec.Header().Get("Content-Type"); !strings.HasPrefix(got, "image/png") {
+		t.Fatalf("captcha image content-type=%q", got)
+	}
+	if _, err := png.Decode(bytes.NewReader(imageRec.Body.Bytes())); err != nil {
+		t.Fatalf("captcha image is not valid png: %v", err)
 	}
 	return captcha
 }
 
-func solveCaptcha(t *testing.T, question string) string {
+func solveCaptcha(t *testing.T, id string) string {
 	t.Helper()
-	var left, right int
-	if _, err := fmt.Sscanf(question, "%d + %d = ?", &left, &right); err != nil {
-		t.Fatalf("parse captcha question %q: %v", question, err)
+	answer := captchaAnswerForTest(id)
+	if answer == "" {
+		t.Fatalf("captcha answer missing for id=%s", id)
 	}
-	return fmt.Sprintf("%d", left+right)
+	return answer
 }
 
 func refresh(t *testing.T, router http.Handler, path string, refreshToken string) auth.TokenPair {

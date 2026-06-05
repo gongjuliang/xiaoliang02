@@ -66,13 +66,13 @@
     var captchaID = "";
 
     function loadCaptcha() {
-        if (!$("#captchaQuestion").length) return;
+        if (!$("#captchaImage").length) return;
         request("GET", "/auth/captcha").then(function (data) {
             captchaID = data.captcha_id || "";
-            $("#captchaQuestion").text(data.question || "点击刷新");
+            $("#captchaImage").attr("src", (data.image_url || "") + "?t=" + Date.now());
             $('[name="captcha_code"]').val("");
         }).fail(function (err) {
-            $("#captchaQuestion").text("验证码加载失败");
+            $("#captchaImage").removeAttr("src");
             showError(err);
         });
     }

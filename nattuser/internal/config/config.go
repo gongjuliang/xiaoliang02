@@ -16,6 +16,8 @@ const (
 	LegacyYAMLPath = "config/config.yaml"
 )
 
+var ErrDefaultConfigMissing = errors.New("default config missing")
+
 type Config struct {
 	App            AppConfig            `yaml:"app" json:"app"`
 	HTTP           HTTPConfig           `yaml:"http" json:"http"`
@@ -64,7 +66,6 @@ type ServerDefaultsConfig struct {
 	ServerHost  string `yaml:"server_host" json:"server_host"`
 	ControlPort int    `yaml:"control_port" json:"control_port"`
 	DataPort    int    `yaml:"data_port" json:"data_port"`
-	UseTLS      bool   `yaml:"use_tls" json:"use_tls"`
 }
 
 type MCPConfig struct {
@@ -101,15 +102,15 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// Load("") intentionally prefers the new JSON config, but falls back to the
-// legacy YAML file so existing deployments keep starting during migration.
+// Load("") is the normal startup path and requires config/config.json. YAML is
+// still supported when an operator explicitly passes a .yaml/.yml config path.
 func defaultConfigPath() (string, error) {
 	if _, err := os.Stat(DefaultPath); err == nil {
 		return DefaultPath, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("stat config %s: %w", DefaultPath, err)
 	}
-	return LegacyYAMLPath, nil
+	return "", ErrDefaultConfigMissing
 }
 
 func parseConfig(path string, content []byte, cfg *Config) error {
@@ -132,7 +133,7 @@ func Default() *Config {
 		},
 		HTTP: HTTPConfig{
 			Host:                   "127.0.0.1",
-			Port:                   18080,
+			Port:                   25520,
 			ReadTimeoutSeconds:     10,
 			WriteTimeoutSeconds:    10,
 			IdleTimeoutSeconds:     60,
@@ -155,9 +156,8 @@ func Default() *Config {
 		},
 		ServerDefaults: ServerDefaultsConfig{
 			ServerHost:  "127.0.0.1",
-			ControlPort: 7000,
-			DataPort:    7001,
-			UseTLS:      false,
+			ControlPort: 25511,
+			DataPort:    25512,
 		},
 	}
 }

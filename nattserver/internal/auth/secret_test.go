@@ -11,10 +11,10 @@ func TestGenerateClientSecretAndVerifyHash(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate client secret: %v", err)
 	}
-	if !strings.HasPrefix(secret, "natt_") {
+	if !strings.HasPrefix(secret, "xiaoliang_") {
 		t.Fatalf("secret prefix=%q", secret)
 	}
-	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(secret, "natt_"))
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(secret, "xiaoliang_"))
 	if err != nil {
 		t.Fatalf("decode secret: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestSecretHint(t *testing.T) {
 	if got := SecretHint("short"); got != "short" {
 		t.Fatalf("short hint=%q", got)
 	}
-	if got := SecretHint("natt_abcdefghijklmnopqrstuvwxyz"); got != "natt_a...uvwxyz" {
+	if got := SecretHint("xiaoliang_abcdefghijklmnopqrstuvwxyz"); got != "xiaoli...uvwxyz" {
 		t.Fatalf("long hint=%q", got)
 	}
 }

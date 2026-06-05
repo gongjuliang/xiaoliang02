@@ -40,8 +40,8 @@ if (NATT.requireAuth()) {
     function renderDetailText(value) {
         var text = String(value || "");
         if (!$.trim(text)) return "-";
-        if (text.length <= 20) return NATT.escapeHtml(text);
-        return NATT.escapeHtml(text.slice(0, 20)) + '...' +
+        if (text.length <= 10) return NATT.escapeHtml(text);
+        return NATT.escapeHtml(text.slice(0, 10)) + '...' +
             '<button type="button" class="layui-btn layui-btn-primary layui-btn-xs detail-more" data-act="show-detail" data-detail="' + NATT.escapeHtml(text) + '">详情</button>';
     }
     function showTextDialog(title, text, className) {
@@ -70,7 +70,6 @@ if (NATT.requireAuth()) {
             '<label>服务端秘钥<input id="cs" class="layui-input" placeholder="nattserver 创建隧道后显示的 key"></label>' +
             '<label>本地地址<input id="lh" class="layui-input" value="127.0.0.1"></label>' +
             '<label>本地端口<input id="lp" class="layui-input" type="number"></label>' +
-            '<label class="check-row"><input id="tls" type="checkbox"><span>TLS</span></label>' +
             '<label class="check-row"><input id="as" type="checkbox"><span>自启动</span></label></div>';
     }
     $("#content").on("click", "#newConn", function () {
@@ -88,7 +87,6 @@ if (NATT.requireAuth()) {
                     client_secret: $("#cs").val(),
                     local_host: $("#lh").val(),
                     local_port: +$("#lp").val(),
-                    use_tls: $("#tls").prop("checked"),
                     auto_start: $("#as").prop("checked")
                 }).then(function () {
                     layui.layer.close(index);

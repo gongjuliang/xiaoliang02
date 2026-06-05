@@ -54,6 +54,7 @@ func TestEndToEndTCPForwardingThroughProtocolClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create tunnel: %v", err)
 	}
+	markTunnelConnectable(t, ctx, database, tunnel.ID)
 
 	controlPort := freeTCPPort(t)
 	dataPort := freeTCPPort(t)
@@ -224,6 +225,7 @@ func setupConcurrentTunnel(t *testing.T, ctx context.Context, database *sql.DB, 
 	if err != nil {
 		t.Fatalf("create tunnel for %s: %v", clientName, err)
 	}
+	markTunnelConnectable(t, ctx, database, tunnel.ID)
 	controlConn := authenticateFakeClient(t, controlPort, secret)
 	if _, err := server.StartTunnel(ctx, tunnel.ID); err != nil {
 		t.Fatalf("start tunnel for %s: %v", clientName, err)

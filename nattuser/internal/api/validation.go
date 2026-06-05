@@ -121,7 +121,7 @@ func fieldType(target any, goName string) reflect.Type {
 
 func jsonTypeName(t reflect.Type) string {
 	if t == nil {
-		return "a valid value"
+		return "有效值"
 	}
 	for t.Kind() == reflect.Pointer {
 		t = t.Elem()

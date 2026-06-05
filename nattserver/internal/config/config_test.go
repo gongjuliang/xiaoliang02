@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,10 +25,6 @@ auth:
 protocol:
   control_port: 17000
   data_port: 17001
-  tls:
-    enabled: true
-    cert_file: cert.pem
-    key_file: key.pem
 tunnel:
   remote_port_min: 20000
   remote_port_max: 20010
@@ -54,12 +51,7 @@ const serverJSONConfig = `{
   },
   "protocol": {
     "control_port": 17000,
-    "data_port": 17001,
-    "tls": {
-      "enabled": true,
-      "cert_file": "cert.pem",
-      "key_file": "key.pem"
-    }
+    "data_port": 17001
   },
   "tunnel": {
     "remote_port_min": 20000,
@@ -90,7 +82,7 @@ func TestLoadMergesYAMLAndCleansPaths(t *testing.T) {
 	if cfg.Auth.SM2PrivateKeyFile != filepath.Clean("data/../keys/private.pem") {
 		t.Fatalf("private key file=%q", cfg.Auth.SM2PrivateKeyFile)
 	}
-	if cfg.Protocol.ControlPort != 17000 || cfg.Protocol.DataPort != 17001 || !cfg.Protocol.TLS.Enabled {
+	if cfg.Protocol.ControlPort != 17000 || cfg.Protocol.DataPort != 17001 {
 		t.Fatalf("unexpected protocol config: %+v", cfg.Protocol)
 	}
 	if cfg.Tunnel.RemotePortMin != 20000 || cfg.Tunnel.RemotePortMax != 20010 {
@@ -112,7 +104,23 @@ func TestLoadMergesJSONAndCleansPaths(t *testing.T) {
 	assertLoadedServerConfig(t, cfg)
 }
 
-func TestLoadDefaultPrefersJSONAndFallsBackToYAML(t *testing.T) {
+func TestDefaultUsesNewStartupPortsAndTunnelRange(t *testing.T) {
+	cfg := Default()
+	if cfg.HTTP.Port != 25510 {
+		t.Fatalf("http.port=%d want 25510", cfg.HTTP.Port)
+	}
+	if cfg.Protocol.ControlPort != 25511 {
+		t.Fatalf("protocol.control_port=%d want 25511", cfg.Protocol.ControlPort)
+	}
+	if cfg.Protocol.DataPort != 25512 {
+		t.Fatalf("protocol.data_port=%d want 25512", cfg.Protocol.DataPort)
+	}
+	if cfg.Tunnel.RemotePortMin != 0 || cfg.Tunnel.RemotePortMax != 65535 {
+		t.Fatalf("tunnel range=%d-%d want 0-65535", cfg.Tunnel.RemotePortMin, cfg.Tunnel.RemotePortMax)
+	}
+}
+
+func TestLoadDefaultPrefersJSONAndRequiresJSON(t *testing.T) {
 	t.Run("prefers json", func(t *testing.T) {
 		dir := t.TempDir()
 		if err := os.Mkdir(filepath.Join(dir, "config"), 0o755); err != nil {
@@ -135,7 +143,7 @@ func TestLoadDefaultPrefersJSONAndFallsBackToYAML(t *testing.T) {
 		}
 	})
 
-	t.Run("falls back to yaml", func(t *testing.T) {
+	t.Run("missing json enters initialization instead of yaml fallback", func(t *testing.T) {
 		dir := t.TempDir()
 		if err := os.Mkdir(filepath.Join(dir, "config"), 0o755); err != nil {
 			t.Fatalf("create config dir: %v", err)
@@ -145,12 +153,9 @@ func TestLoadDefaultPrefersJSONAndFallsBackToYAML(t *testing.T) {
 		}
 		t.Chdir(dir)
 
-		cfg, err := Load("")
-		if err != nil {
-			t.Fatalf("load fallback config: %v", err)
-		}
-		if cfg.App.Name != "yaml-default" {
-			t.Fatalf("app.name=%s want yaml-default", cfg.App.Name)
+		_, err := Load("")
+		if !errors.Is(err, ErrDefaultConfigMissing) {
+			t.Fatalf("err=%v want ErrDefaultConfigMissing", err)
 		}
 	})
 }
@@ -201,7 +206,7 @@ func TestValidateRejectsInvalidPortsAndTunnelRange(t *testing.T) {
 			cfg.Protocol.DataPort = -1
 		},
 		"remote port min below range": func(cfg *Config) {
-			cfg.Tunnel.RemotePortMin = 0
+			cfg.Tunnel.RemotePortMin = -1
 		},
 		"remote port max above range": func(cfg *Config) {
 			cfg.Tunnel.RemotePortMax = 70000
@@ -256,7 +261,7 @@ func assertLoadedServerConfig(t *testing.T, cfg *Config) {
 	if cfg.Auth.SM2PrivateKeyFile != filepath.Clean("data/../keys/private.pem") {
 		t.Fatalf("private key file=%q", cfg.Auth.SM2PrivateKeyFile)
 	}
-	if cfg.Protocol.ControlPort != 17000 || cfg.Protocol.DataPort != 17001 || !cfg.Protocol.TLS.Enabled {
+	if cfg.Protocol.ControlPort != 17000 || cfg.Protocol.DataPort != 17001 {
 		t.Fatalf("unexpected protocol config: %+v", cfg.Protocol)
 	}
 	if cfg.Tunnel.RemotePortMin != 20000 || cfg.Tunnel.RemotePortMax != 20010 {

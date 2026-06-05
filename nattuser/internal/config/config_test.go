@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,7 +26,6 @@ server_defaults:
   server_host: 10.0.0.10
   control_port: 17000
   data_port: 17001
-  use_tls: true
 `
 
 const clientJSONConfig = `{
@@ -50,8 +50,7 @@ const clientJSONConfig = `{
   "server_defaults": {
     "server_host": "10.0.0.10",
     "control_port": 17000,
-    "data_port": 17001,
-    "use_tls": true
+    "data_port": 17001
   }
 }`
 
@@ -80,8 +79,7 @@ func TestLoadMergesYAMLAndCleansPaths(t *testing.T) {
 	}
 	if cfg.ServerDefaults.ServerHost != "10.0.0.10" ||
 		cfg.ServerDefaults.ControlPort != 17000 ||
-		cfg.ServerDefaults.DataPort != 17001 ||
-		!cfg.ServerDefaults.UseTLS {
+		cfg.ServerDefaults.DataPort != 17001 {
 		t.Fatalf("unexpected server defaults: %+v", cfg.ServerDefaults)
 	}
 }
@@ -100,7 +98,20 @@ func TestLoadMergesJSONAndCleansPaths(t *testing.T) {
 	assertLoadedClientConfig(t, cfg)
 }
 
-func TestLoadDefaultPrefersJSONAndFallsBackToYAML(t *testing.T) {
+func TestDefaultUsesNewStartupPorts(t *testing.T) {
+	cfg := Default()
+	if cfg.HTTP.Port != 25520 {
+		t.Fatalf("http.port=%d want 25520", cfg.HTTP.Port)
+	}
+	if cfg.ServerDefaults.ControlPort != 25511 {
+		t.Fatalf("server_defaults.control_port=%d want 25511", cfg.ServerDefaults.ControlPort)
+	}
+	if cfg.ServerDefaults.DataPort != 25512 {
+		t.Fatalf("server_defaults.data_port=%d want 25512", cfg.ServerDefaults.DataPort)
+	}
+}
+
+func TestLoadDefaultPrefersJSONAndRequiresJSON(t *testing.T) {
 	t.Run("prefers json", func(t *testing.T) {
 		dir := t.TempDir()
 		if err := os.Mkdir(filepath.Join(dir, "config"), 0o755); err != nil {
@@ -123,7 +134,7 @@ func TestLoadDefaultPrefersJSONAndFallsBackToYAML(t *testing.T) {
 		}
 	})
 
-	t.Run("falls back to yaml", func(t *testing.T) {
+	t.Run("missing json enters initialization instead of yaml fallback", func(t *testing.T) {
 		dir := t.TempDir()
 		if err := os.Mkdir(filepath.Join(dir, "config"), 0o755); err != nil {
 			t.Fatalf("create config dir: %v", err)
@@ -133,12 +144,9 @@ func TestLoadDefaultPrefersJSONAndFallsBackToYAML(t *testing.T) {
 		}
 		t.Chdir(dir)
 
-		cfg, err := Load("")
-		if err != nil {
-			t.Fatalf("load fallback config: %v", err)
-		}
-		if cfg.App.Name != "yaml-default" {
-			t.Fatalf("app.name=%s want yaml-default", cfg.App.Name)
+		_, err := Load("")
+		if !errors.Is(err, ErrDefaultConfigMissing) {
+			t.Fatalf("err=%v want ErrDefaultConfigMissing", err)
 		}
 	})
 }
@@ -236,8 +244,7 @@ func assertLoadedClientConfig(t *testing.T, cfg *Config) {
 	}
 	if cfg.ServerDefaults.ServerHost != "10.0.0.10" ||
 		cfg.ServerDefaults.ControlPort != 17000 ||
-		cfg.ServerDefaults.DataPort != 17001 ||
-		!cfg.ServerDefaults.UseTLS {
+		cfg.ServerDefaults.DataPort != 17001 {
 		t.Fatalf("unexpected server defaults: %+v", cfg.ServerDefaults)
 	}
 }

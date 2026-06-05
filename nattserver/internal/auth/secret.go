@@ -11,7 +11,7 @@ func GenerateClientSecret() (string, error) {
 	if _, err := rand.Read(raw[:]); err != nil {
 		return "", fmt.Errorf("generate client secret: %w", err)
 	}
-	return "natt_" + base64.RawURLEncoding.EncodeToString(raw[:]), nil
+	return "xiaoliang_" + base64.RawURLEncoding.EncodeToString(raw[:]), nil
 }
 
 func SecretHint(secret string) string {

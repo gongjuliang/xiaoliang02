@@ -2,9 +2,11 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"nattuser/internal/db"
@@ -60,15 +62,14 @@ func TestClientOpsStatusAuditAndConfigFlow(t *testing.T) {
 		"settings": map[string]string{
 			"log.level":                    "debug",
 			"server_defaults.control_port": "7200",
-			"server_defaults.use_tls":      "true",
 		},
 	})
 	var updateData struct {
 		Updated []configUpdateResult `json:"updated"`
 	}
 	decodeResponseData(t, updateResp, &updateData)
-	if len(updateData.Updated) != 3 {
-		t.Fatalf("updated count=%d want=3", len(updateData.Updated))
+	if len(updateData.Updated) != 2 {
+		t.Fatalf("updated count=%d want=2", len(updateData.Updated))
 	}
 	if !hasConfigResult(updateData.Updated, "server_defaults.control_port", true, false) {
 		t.Fatalf("missing hot reload control port result: %+v", updateData.Updated)
@@ -82,7 +83,7 @@ func TestClientOpsStatusAuditAndConfigFlow(t *testing.T) {
 	})
 	var defaulted model.ServerConnection
 	decodeResponseData(t, defaultedResp, &defaulted)
-	if defaulted.ServerPort != 7200 || !defaulted.UseTLS {
+	if defaulted.ServerPort != 7200 {
 		t.Fatalf("hot updated defaults were not applied: %+v", defaulted)
 	}
 
@@ -119,6 +120,52 @@ func TestClientRouterServesMCPOnHTTPPort(t *testing.T) {
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("mcp status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestClientMCPConfigTokenIsSystemManaged(t *testing.T) {
+	router, database, tokens := setupAuthenticatedClientRouter(t)
+	defer database.Close()
+
+	if err := db.UpsertSetting(context.Background(), database, "mcp.access_token", ""); err != nil {
+		t.Fatalf("clear mcp token: %v", err)
+	}
+
+	customResp := authorizedJSONAllowStatus(t, router, http.MethodPut, "/api/client/v1/mcp-config", tokens.AccessToken, map[string]any{
+		"enabled":      true,
+		"access_token": "custom-token",
+	}, http.StatusBadRequest)
+	assertResponseMessageContains(t, customResp, "MCP Key")
+
+	enableResp := authorizedJSON(t, router, http.MethodPut, "/api/client/v1/mcp-config", tokens.AccessToken, map[string]any{
+		"enabled": true,
+	})
+	var enabled struct {
+		Enabled        bool   `json:"enabled"`
+		HasAccessToken bool   `json:"has_access_token"`
+		AccessHint     string `json:"access_token_hint"`
+	}
+	decodeResponseData(t, enableResp, &enabled)
+	if !enabled.Enabled || !enabled.HasAccessToken || enabled.AccessHint == "" {
+		t.Fatalf("unexpected mcp enable response: %+v", enabled)
+	}
+
+	revealResp := authorizedJSON(t, router, http.MethodGet, "/api/client/v1/mcp-config/reveal-token", tokens.AccessToken, nil)
+	var revealed struct {
+		AccessToken string `json:"access_token"`
+		AccessHint  string `json:"access_token_hint"`
+	}
+	decodeResponseData(t, revealResp, &revealed)
+	if !strings.HasPrefix(revealed.AccessToken, "xiaoliang_") || revealed.AccessHint == "" {
+		t.Fatalf("unexpected revealed token: %+v", revealed)
+	}
+
+	logs, _, err := db.ListAuditLogs(context.Background(), database, 50, 0)
+	if err != nil {
+		t.Fatalf("list audit logs: %v", err)
+	}
+	if !hasAuditAction(logs, "mcp_token_reveal") {
+		t.Fatalf("missing mcp_token_reveal audit log: %+v", logs)
 	}
 }
 
@@ -188,6 +235,15 @@ func TestClientLocalTunnelCRUDFlow(t *testing.T) {
 	if deleted.ID != created.ID {
 		t.Fatalf("deleted local tunnel id=%d want=%d", deleted.ID, created.ID)
 	}
+}
+
+func hasAuditAction(logs []model.AuditLog, action string) bool {
+	for _, item := range logs {
+		if item.Action == action {
+			return true
+		}
+	}
+	return false
 }
 
 func hasConfigResult(results []configUpdateResult, key string, hotReloaded bool, restartRequired bool) bool {

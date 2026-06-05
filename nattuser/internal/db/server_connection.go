@@ -16,7 +16,6 @@ type CreateServerConnectionParams struct {
 	ServerPort   int
 	DataPort     int
 	RemotePort   int
-	UseTLS       bool
 	ClientSecret string
 	LocalHost    string
 	LocalPort    int
@@ -30,7 +29,6 @@ type UpdateServerConnectionParams struct {
 	ServerPort   int
 	DataPort     int
 	RemotePort   int
-	UseTLS       bool
 	ClientSecret string
 	LocalHost    string
 	LocalPort    int
@@ -117,7 +115,7 @@ VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', ?, ?);`,
 		params.ServerPort,
 		params.DataPort,
 		params.RemotePort,
-		boolToInt(params.UseTLS),
+		0,
 		params.ClientSecret,
 		params.LocalHost,
 		params.LocalPort,
@@ -144,7 +142,7 @@ WHERE id = ?;`,
 		params.ServerPort,
 		params.DataPort,
 		params.RemotePort,
-		boolToInt(params.UseTLS),
+		0,
 		params.ClientSecret,
 		params.LocalHost,
 		params.LocalPort,
@@ -254,7 +252,7 @@ type serverConnectionScanner interface {
 
 func scanServerConnection(scanner serverConnectionScanner) (model.ServerConnection, error) {
 	var connection model.ServerConnection
-	var useTLS int
+	var ignoredUseTLS int
 	var autoStart int
 	var lastError sql.NullString
 	var remark sql.NullString
@@ -265,7 +263,7 @@ func scanServerConnection(scanner serverConnectionScanner) (model.ServerConnecti
 		&connection.ServerPort,
 		&connection.DataPort,
 		&connection.RemotePort,
-		&useTLS,
+		&ignoredUseTLS,
 		&connection.ClientSecret,
 		&connection.LocalHost,
 		&connection.LocalPort,
@@ -279,7 +277,6 @@ func scanServerConnection(scanner serverConnectionScanner) (model.ServerConnecti
 	if err != nil {
 		return model.ServerConnection{}, err
 	}
-	connection.UseTLS = useTLS == 1
 	connection.AutoStart = autoStart == 1
 	connection.LastError = nullableString(lastError)
 	connection.Remark = nullableString(remark)

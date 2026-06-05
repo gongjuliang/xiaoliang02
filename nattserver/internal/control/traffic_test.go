@@ -53,6 +53,7 @@ func TestTrafficStatsFlushPeriodicallyWhileConnectionIsActive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create tunnel: %v", err)
 	}
+	markTunnelConnectable(t, ctx, database, tunnel.ID)
 
 	controlPort := freeTCPPort(t)
 	dataPort := freeTCPPort(t)

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -63,6 +64,7 @@ func NewAuthHandler(cfg config.AuthConfig, database *sql.DB, log *logger.Logger)
 func (h *AuthHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.GET("/auth/sm2-public-key", h.publicKey)
 	group.GET("/auth/captcha", h.captcha)
+	group.GET("/auth/captcha/:id/image", h.captchaImage)
 	group.POST("/auth/login", h.login)
 	group.POST("/auth/refresh", h.refresh)
 
@@ -112,7 +114,17 @@ func (h *AuthHandler) captcha(c *gin.Context) {
 		Fail(c, http.StatusInternalServerError, CodeInternalError, "生成验证码失败")
 		return
 	}
+	challenge.ImageURL = strings.TrimSuffix(c.Request.URL.Path, "/captcha") + "/captcha/" + url.PathEscape(challenge.ID) + "/image"
 	OK(c, challenge)
+}
+
+func (h *AuthHandler) captchaImage(c *gin.Context) {
+	raw, err := h.captchaStore.Image(c.Param("id"))
+	if err != nil {
+		Fail(c, http.StatusNotFound, CodeNotFound, "验证码不存在或已过期")
+		return
+	}
+	c.Data(http.StatusOK, "image/png", raw)
 }
 
 func (h *AuthHandler) login(c *gin.Context) {

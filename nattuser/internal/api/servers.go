@@ -28,7 +28,6 @@ type serverConnectionRequest struct {
 	ServerHost   string `json:"server_host"`
 	ServerPort   int    `json:"server_port"`
 	DataPort     int    `json:"data_port"`
-	UseTLS       *bool  `json:"use_tls"`
 	ClientSecret string `json:"client_secret" binding:"required"`
 	LocalHost    string `json:"local_host" binding:"required"`
 	LocalPort    int    `json:"local_port"`
@@ -43,7 +42,6 @@ type serverConnectionResponse struct {
 	ServerPort   int                          `json:"server_port"`
 	DataPort     int                          `json:"data_port"`
 	RemotePort   int                          `json:"remote_port"`
-	UseTLS       bool                         `json:"use_tls"`
 	ClientSecret string                       `json:"client_secret"`
 	LocalHost    string                       `json:"local_host"`
 	LocalPort    int                          `json:"local_port"`
@@ -97,7 +95,6 @@ func (h *ServerHandler) create(c *gin.Context) {
 		ServerHost:   req.ServerHost,
 		ServerPort:   req.ServerPort,
 		DataPort:     req.DataPort,
-		UseTLS:       h.resolveUseTLS(req.UseTLS),
 		ClientSecret: req.ClientSecret,
 		LocalHost:    req.LocalHost,
 		LocalPort:    req.LocalPort,
@@ -109,7 +106,7 @@ func (h *ServerHandler) create(c *gin.Context) {
 		return
 	}
 	_ = db.InsertAuditLog(c.Request.Context(), h.database, currentActor(c), "server_create", "server_connection", strconv.FormatInt(connection.ID, 10), fmt.Sprintf("created server connection %s", connection.Name), c.ClientIP())
-	OK(c, connection)
+	OK(c, serverConnectionResponseFrom(connection))
 }
 
 func (h *ServerHandler) update(c *gin.Context) {
@@ -126,7 +123,6 @@ func (h *ServerHandler) update(c *gin.Context) {
 		ServerHost:   req.ServerHost,
 		ServerPort:   req.ServerPort,
 		DataPort:     req.DataPort,
-		UseTLS:       h.resolveUseTLS(req.UseTLS),
 		ClientSecret: req.ClientSecret,
 		LocalHost:    req.LocalHost,
 		LocalPort:    req.LocalPort,
@@ -138,7 +134,7 @@ func (h *ServerHandler) update(c *gin.Context) {
 		return
 	}
 	_ = db.InsertAuditLog(c.Request.Context(), h.database, currentActor(c), "server_update", "server_connection", strconv.FormatInt(connection.ID, 10), fmt.Sprintf("updated server connection %s", connection.Name), c.ClientIP())
-	OK(c, connection)
+	OK(c, serverConnectionResponseFrom(connection))
 }
 
 func (h *ServerHandler) delete(c *gin.Context) {
@@ -152,7 +148,7 @@ func (h *ServerHandler) delete(c *gin.Context) {
 		return
 	}
 	_ = db.InsertAuditLog(c.Request.Context(), h.database, currentActor(c), "server_delete", "server_connection", strconv.FormatInt(connection.ID, 10), fmt.Sprintf("deleted server connection %s", connection.Name), c.ClientIP())
-	OK(c, connection)
+	OK(c, serverConnectionResponseFrom(connection))
 }
 
 func (h *ServerHandler) start(c *gin.Context) {
@@ -174,7 +170,7 @@ func (h *ServerHandler) setStatus(c *gin.Context, status model.ServerConnectionS
 		return
 	}
 	_ = db.InsertAuditLog(c.Request.Context(), h.database, currentActor(c), action, "server_connection", strconv.FormatInt(connection.ID, 10), fmt.Sprintf("%s %s", contentPrefix, connection.Name), c.ClientIP())
-	OK(c, connection)
+	OK(c, serverConnectionResponseFrom(connection))
 }
 
 func (h *ServerHandler) bindAndValidate(c *gin.Context, req *serverConnectionRequest) bool {
@@ -216,13 +212,6 @@ func (h *ServerHandler) bindAndValidate(c *gin.Context, req *serverConnectionReq
 	return false
 }
 
-func (h *ServerHandler) resolveUseTLS(value *bool) bool {
-	if value == nil {
-		return h.defaults.UseTLS
-	}
-	return *value
-}
-
 func (h *ServerHandler) writeDBError(c *gin.Context, err error, fallback string) {
 	if errors.Is(err, db.ErrNotFound) {
 		Fail(c, http.StatusNotFound, CodeNotFound, "服务端连接不存在")
@@ -241,26 +230,29 @@ func (h *ServerHandler) writeDBError(c *gin.Context, err error, fallback string)
 func serverConnectionResponses(connections []model.ServerConnection) []serverConnectionResponse {
 	result := make([]serverConnectionResponse, 0, len(connections))
 	for _, connection := range connections {
-		result = append(result, serverConnectionResponse{
-			ID:           connection.ID,
-			Name:         connection.Name,
-			ServerHost:   connection.ServerHost,
-			ServerPort:   connection.ServerPort,
-			DataPort:     connection.DataPort,
-			RemotePort:   connection.RemotePort,
-			UseTLS:       connection.UseTLS,
-			ClientSecret: connection.ClientSecret,
-			LocalHost:    connection.LocalHost,
-			LocalPort:    connection.LocalPort,
-			Status:       connection.Status,
-			AutoStart:    connection.AutoStart,
-			LastError:    connection.LastError,
-			Remark:       connection.Remark,
-			CreatedAt:    connection.CreatedAt,
-			UpdatedAt:    connection.UpdatedAt,
-		})
+		result = append(result, serverConnectionResponseFrom(connection))
 	}
 	return result
+}
+
+func serverConnectionResponseFrom(connection model.ServerConnection) serverConnectionResponse {
+	return serverConnectionResponse{
+		ID:           connection.ID,
+		Name:         connection.Name,
+		ServerHost:   connection.ServerHost,
+		ServerPort:   connection.ServerPort,
+		DataPort:     connection.DataPort,
+		RemotePort:   connection.RemotePort,
+		ClientSecret: connection.ClientSecret,
+		LocalHost:    connection.LocalHost,
+		LocalPort:    connection.LocalPort,
+		Status:       connection.Status,
+		AutoStart:    connection.AutoStart,
+		LastError:    connection.LastError,
+		Remark:       connection.Remark,
+		CreatedAt:    connection.CreatedAt,
+		UpdatedAt:    connection.UpdatedAt,
+	}
 }
 
 func parseIDParam(c *gin.Context) (int64, bool) {

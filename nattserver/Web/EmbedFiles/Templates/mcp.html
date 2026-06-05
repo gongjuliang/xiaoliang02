@@ -8,9 +8,10 @@
     <link rel="stylesheet" href="/static/css/app.css">
     <style>
         body { min-height: auto; padding: 22px 24px; }
-        .mcp-form { display: grid; gap: 12px; max-width: 520px; }
-        .mcp-form input { width: 100%; }
+        .mcp-form { display: grid; gap: 12px; max-width: 640px; }
         .hint { color: #687386; }
+        .token-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .token-hint { font-family: monospace; color: #334155; }
         .secret-box { font-family: monospace; background: #f5f7fb; border: 1px solid #dbe3ef; border-radius: 6px; padding: 8px; margin-top: 8px; word-break: break-all; }
         .mcp-section { margin-top: 16px; }
         .mcp-section h4 { margin: 0 0 10px; font-size: 14px; color: #475569; }
@@ -34,25 +35,35 @@ if (NATT.requireAuth()) {
             '<code>提示词：查看服务端仪表盘状态和流量\n触发工具：server.get_dashboard\n参数示例：{}</code>' +
             '</div></div>';
     }
+    function tokenText(d) {
+        if (!d.has_access_token) return "未生成";
+        return d.access_token_hint || "已生成";
+    }
     function loadMCP() {
         NATT.request("GET", "/mcp-config").then(function (d) {
             $("#content").html('<div class="panel"><h3>MCP 配置</h3><div class="mcp-form">' +
                 '<label class="check-row"><input id="enabled" type="checkbox" ' + (d.enabled ? 'checked' : '') + '><span>启用 MCP</span></label>' +
-                '<label>访问 Key<input id="token" class="layui-input" placeholder="留空则保留原 key"></label>' +
-                '<p class="hint">当前 Key：' + NATT.escapeHtml(d.access_token_hint || "未设置") + '</p>' +
-                '<div class="row-actions"><button id="saveMCP" class="layui-btn primary" type="button">保存</button><button id="rotateMCP" class="layui-btn" type="button">重置 Key</button></div>' +
+                '<div class="token-row"><span>当前 Key：</span><span class="token-hint">' + NATT.escapeHtml(tokenText(d)) + '</span>' +
+                '<button id="revealMCP" class="layui-btn layui-btn-primary layui-btn-sm" type="button">查看</button>' +
+                '<button id="rotateMCP" class="layui-btn layui-btn-sm" type="button">重置 Key</button></div>' +
+                '<div class="row-actions"><button id="saveMCP" class="layui-btn primary" type="button">保存</button></div>' +
                 '</div>' + usageHTML() + '</div>');
         }).fail(NATT.showError);
     }
     $("#content").on("click", "#saveMCP", function () {
-        NATT.request("PUT", "/mcp-config", { enabled: $("#enabled").prop("checked"), access_token: $("#token").val() }).then(function () {
+        NATT.request("PUT", "/mcp-config", { enabled: $("#enabled").prop("checked") }).then(function () {
             layui.layer.msg("保存成功");
             loadMCP();
         }).fail(NATT.showError);
     });
+    $("#content").on("click", "#revealMCP", function () {
+        NATT.request("GET", "/mcp-config/reveal-token").then(function (d) {
+            layui.layer.alert('<div class="secret-box">' + NATT.escapeHtml(d.access_token) + '</div>', { title: "完整 MCP Key" });
+        }).fail(NATT.showError);
+    });
     $("#content").on("click", "#rotateMCP", function () {
         NATT.request("POST", "/mcp-config/rotate-token").then(function (d) {
-            layui.layer.alert('新 MCP Key：<div class="secret-box">' + NATT.escapeHtml(d.access_token) + '</div>');
+            layui.layer.alert('<div class="secret-box">' + NATT.escapeHtml(d.access_token) + '</div>', { title: "新的 MCP Key" });
             loadMCP();
         }).fail(NATT.showError);
     });

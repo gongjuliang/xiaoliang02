@@ -48,6 +48,7 @@ func (h *OpsHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.PUT("/config", h.updateConfig)
 	group.GET("/mcp-config", h.getMCPConfig)
 	group.PUT("/mcp-config", h.updateMCPConfig)
+	group.GET("/mcp-config/reveal-token", h.revealMCPToken)
 	group.POST("/mcp-config/rotate-token", h.rotateMCPToken)
 }
 
@@ -107,11 +108,6 @@ func (h *OpsHandler) getConfig(c *gin.Context) {
 				"control_port": h.cfg.Protocol.ControlPort,
 				"data_host":    h.cfg.Protocol.DataHost,
 				"data_port":    h.cfg.Protocol.DataPort,
-				"tls": gin.H{
-					"enabled":   h.cfg.Protocol.TLS.Enabled,
-					"cert_file": h.cfg.Protocol.TLS.CertFile,
-					"key_file":  h.cfg.Protocol.TLS.KeyFile,
-				},
 			},
 			"tunnel": gin.H{
 				"remote_port_min": h.cfg.Tunnel.RemotePortMin,
@@ -166,7 +162,7 @@ func (h *OpsHandler) applyConfigSetting(key string, value string) (configUpdateR
 		}
 		return configUpdateResult{Key: key, Value: level, HotReloaded: true, RestartRequired: false}, nil
 	case "tunnel.remote_port_min":
-		port, err := parsePortValue(key, value)
+		port, err := parsePortValue(key, value, true)
 		if err != nil {
 			return configUpdateResult{}, err
 		}
@@ -176,7 +172,7 @@ func (h *OpsHandler) applyConfigSetting(key string, value string) (configUpdateR
 		h.cfg.Tunnel.RemotePortMin = port
 		return configUpdateResult{Key: key, Value: strconv.Itoa(port), HotReloaded: true, RestartRequired: false}, nil
 	case "tunnel.remote_port_max":
-		port, err := parsePortValue(key, value)
+		port, err := parsePortValue(key, value, false)
 		if err != nil {
 			return configUpdateResult{}, err
 		}
@@ -187,7 +183,6 @@ func (h *OpsHandler) applyConfigSetting(key string, value string) (configUpdateR
 		return configUpdateResult{Key: key, Value: strconv.Itoa(port), HotReloaded: true, RestartRequired: false}, nil
 	case "http.host", "http.port",
 		"protocol.control_host", "protocol.control_port", "protocol.data_host", "protocol.data_port",
-		"protocol.tls.enabled", "protocol.tls.cert_file", "protocol.tls.key_file",
 		"auth.access_token_ttl_minutes", "auth.refresh_token_ttl_minutes", "auth.login_rate_limit_per_minute":
 		return configUpdateResult{}, fmt.Errorf("该配置不支持热更新，请修改配置文件后重启服务")
 	default:
@@ -210,9 +205,16 @@ func editableConfigKeys() []gin.H {
 	}
 }
 
-func parsePortValue(key string, value string) (int, error) {
+func parsePortValue(key string, value string, allowZero bool) (int, error) {
 	port, err := strconv.Atoi(value)
-	if err != nil || port < 1 || port > 65535 {
+	min := 1
+	if allowZero {
+		min = 0
+	}
+	if err != nil || port < min || port > 65535 {
+		if allowZero {
+			return 0, fmt.Errorf("%s 必须在 0 到 65535 之间", key)
+		}
 		return 0, fmt.Errorf("%s 必须在 1 到 65535 之间", key)
 	}
 	return port, nil
@@ -221,16 +223,12 @@ func parsePortValue(key string, value string) (int, error) {
 func validateRestartSetting(key string, value string) error {
 	switch key {
 	case "http.port", "protocol.control_port", "protocol.data_port":
-		_, err := parsePortValue(key, value)
+		_, err := parsePortValue(key, value, false)
 		return err
 	case "auth.access_token_ttl_minutes", "auth.refresh_token_ttl_minutes", "auth.login_rate_limit_per_minute":
 		parsed, err := strconv.Atoi(value)
 		if err != nil || parsed <= 0 {
-			return fmt.Errorf("%s must be greater than 0", key)
-		}
-	case "protocol.tls.enabled":
-		if _, err := strconv.ParseBool(value); err != nil {
-			return fmt.Errorf("protocol.tls.enabled must be true or false")
+			return fmt.Errorf("%s 必须大于 0", key)
 		}
 	}
 	return nil
@@ -265,31 +263,34 @@ func (h *OpsHandler) updateMCPConfig(c *gin.Context) {
 	if !bindJSONOrFail(c, &req, "MCP 配置参数不正确") {
 		return
 	}
-	token := strings.TrimSpace(req.AccessToken)
-	if req.Enabled && token == "" {
-		existing, err := db.GetSetting(c.Request.Context(), h.database, "mcp.access_token")
-		if err != nil && !errors.Is(err, db.ErrNotFound) {
-			h.writeError(c, err, "load mcp token failed")
-			return
-		}
-		token = strings.TrimSpace(existing)
+	if strings.TrimSpace(req.AccessToken) != "" {
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "MCP Key 由系统生成，不允许自定义")
+		return
 	}
-	if req.Enabled && token == "" {
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "启用 MCP 时 access_token 为必填项")
+	token, ok := h.ensureMCPToken(c, req.Enabled)
+	if !ok {
 		return
 	}
 	if err := db.UpsertSetting(c.Request.Context(), h.database, "mcp.enabled", strconv.FormatBool(req.Enabled)); err != nil {
 		h.writeError(c, err, "save mcp enabled failed")
 		return
 	}
-	if strings.TrimSpace(req.AccessToken) != "" {
-		if err := db.UpsertSetting(c.Request.Context(), h.database, "mcp.access_token", token); err != nil {
-			h.writeError(c, err, "save mcp token failed")
-			return
-		}
-	}
 	_ = db.InsertAuditLog(c.Request.Context(), h.database, currentActor(c), "mcp_config_update", "mcp", "server", "updated mcp config", c.ClientIP())
 	OK(c, gin.H{"enabled": req.Enabled, "access_token_hint": auth.SecretHint(token), "has_access_token": token != ""})
+}
+
+func (h *OpsHandler) revealMCPToken(c *gin.Context) {
+	token, err := db.GetSetting(c.Request.Context(), h.database, "mcp.access_token")
+	if errors.Is(err, db.ErrNotFound) || strings.TrimSpace(token) == "" {
+		Fail(c, http.StatusNotFound, CodeNotFound, "MCP Key 尚未生成")
+		return
+	}
+	if err != nil {
+		h.writeError(c, err, "load mcp token failed")
+		return
+	}
+	_ = db.InsertAuditLog(c.Request.Context(), h.database, currentActor(c), "mcp_token_reveal", "mcp", "server", "revealed mcp token", c.ClientIP())
+	OK(c, gin.H{"access_token": token, "access_token_hint": auth.SecretHint(token)})
 }
 
 func (h *OpsHandler) rotateMCPToken(c *gin.Context) {
@@ -304,4 +305,26 @@ func (h *OpsHandler) rotateMCPToken(c *gin.Context) {
 	}
 	_ = db.InsertAuditLog(c.Request.Context(), h.database, currentActor(c), "mcp_token_rotate", "mcp", "server", "rotated mcp token", c.ClientIP())
 	OK(c, gin.H{"access_token": token, "access_token_hint": auth.SecretHint(token)})
+}
+
+func (h *OpsHandler) ensureMCPToken(c *gin.Context, enabled bool) (string, bool) {
+	existing, err := db.GetSetting(c.Request.Context(), h.database, "mcp.access_token")
+	if err != nil && !errors.Is(err, db.ErrNotFound) {
+		h.writeError(c, err, "load mcp token failed")
+		return "", false
+	}
+	token := strings.TrimSpace(existing)
+	if !enabled || token != "" {
+		return token, true
+	}
+	token, err = auth.GenerateClientSecret()
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, CodeInternalError, "生成 MCP Key 失败")
+		return "", false
+	}
+	if err := db.UpsertSetting(c.Request.Context(), h.database, "mcp.access_token", token); err != nil {
+		h.writeError(c, err, "save mcp token failed")
+		return "", false
+	}
+	return token, true
 }

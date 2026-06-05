@@ -35,8 +35,7 @@ func TestServerConnectionManagementFlow(t *testing.T) {
 		"server_host":   "example.com",
 		"server_port":   7000,
 		"data_port":     7001,
-		"use_tls":       true,
-		"client_secret": "natt_test_secret",
+		"client_secret": "xiaoliang_test_secret",
 		"local_host":    "127.0.0.1",
 		"local_port":    8080,
 		"auto_start":    true,
@@ -44,11 +43,8 @@ func TestServerConnectionManagementFlow(t *testing.T) {
 	})
 	var created model.ServerConnection
 	decodeResponseData(t, createResp, &created)
-	if created.ID == 0 || created.Status != model.ServerConnectionStatusStopped || !created.UseTLS || !created.AutoStart {
+	if created.ID == 0 || created.Status != model.ServerConnectionStatusStopped || !created.AutoStart {
 		t.Fatalf("unexpected created server connection: %+v", created)
-	}
-	if strings.Contains(createResp.Body.String(), "natt_test_secret") || strings.Contains(createResp.Body.String(), "client_secret") {
-		t.Fatal("response must not expose client_secret")
 	}
 
 	listResp := authorizedJSON(t, router, http.MethodGet, "/api/client/v1/tunnel-connections?page=1&page_size=10", tokens.AccessToken, nil)
@@ -71,7 +67,7 @@ func TestServerConnectionManagementFlow(t *testing.T) {
 		t.Fatalf("server connection items=%d want=1", len(listData.Items))
 	}
 	item := listData.Items[0]
-	if item.ServerHost != "example.com" || item.ServerPort != 7000 || item.DataPort != 7001 || item.RemotePort != 0 || item.ClientSecret != "natt_test_secret" {
+	if item.ServerHost != "example.com" || item.ServerPort != 7000 || item.DataPort != 7001 || item.RemotePort != 0 || item.ClientSecret != "xiaoliang_test_secret" {
 		t.Fatalf("list did not expose expected connection display fields: %+v", item)
 	}
 
@@ -80,8 +76,7 @@ func TestServerConnectionManagementFlow(t *testing.T) {
 		"server_host":   "192.0.2.10",
 		"server_port":   7100,
 		"data_port":     7101,
-		"use_tls":       false,
-		"client_secret": "natt_test_secret_2",
+		"client_secret": "xiaoliang_test_secret_2",
 		"local_host":    "127.0.0.1",
 		"local_port":    9090,
 		"auto_start":    false,
@@ -122,20 +117,20 @@ func TestServerConnectionCreateUsesDefaultsAndRejectsBadPorts(t *testing.T) {
 
 	createResp := authorizedJSON(t, router, http.MethodPost, "/api/client/v1/tunnel-connections", tokens.AccessToken, map[string]any{
 		"name":          "defaulted",
-		"client_secret": "natt_default_secret",
+		"client_secret": "xiaoliang_default_secret",
 		"local_host":    "127.0.0.1",
 		"local_port":    8080,
 	})
 	var created model.ServerConnection
 	decodeResponseData(t, createResp, &created)
-	if created.ServerHost != "127.0.0.1" || created.ServerPort != 7000 || created.DataPort != 7001 {
+	if created.ServerHost != "127.0.0.1" || created.ServerPort != 25511 || created.DataPort != 25512 {
 		t.Fatalf("defaults were not applied: %+v", created)
 	}
 
 	resp := authorizedJSONAllowStatus(t, router, http.MethodPost, "/api/client/v1/tunnel-connections", tokens.AccessToken, map[string]any{
 		"name":          "bad-port",
 		"server_port":   70000,
-		"client_secret": "natt_default_secret",
+		"client_secret": "xiaoliang_default_secret",
 		"local_host":    "127.0.0.1",
 		"local_port":    8080,
 	}, http.StatusBadRequest)
@@ -151,8 +146,7 @@ func TestServerConnectionCreateReturnsFieldLevelValidationMessages(t *testing.T)
 		"server_host":   "127.0.0.1",
 		"server_port":   7000,
 		"data_port":     7001,
-		"use_tls":       false,
-		"client_secret": "natt_validation_secret",
+		"client_secret": "xiaoliang_validation_secret",
 		"local_host":    "127.0.0.1",
 		"local_port":    8080,
 	}
@@ -193,14 +187,6 @@ func TestServerConnectionCreateReturnsFieldLevelValidationMessages(t *testing.T)
 			},
 			wantStatus: http.StatusBadRequest,
 			want:       "server_port 必须是数字",
-		},
-		{
-			name: "use tls string",
-			mutate: func(body map[string]any) {
-				body["use_tls"] = "yes"
-			},
-			wantStatus: http.StatusBadRequest,
-			want:       "use_tls 必须是 true 或 false",
 		},
 		{
 			name: "local port too large",
@@ -264,9 +250,10 @@ func setupAuthenticatedClientRouter(t *testing.T) (*gin.Engine, *sql.DB, auth.To
 	if err := db.UpsertSetting(context.Background(), database, "mcp.access_token", cfg.MCP.AccessToken); err != nil {
 		t.Fatalf("set mcp token: %v", err)
 	}
+	seedTestAdmin(t, database)
 	router := NewRouter(cfg, database, nil)
 	publicKey := fetchPublicKey(t, router, "/api/client/v1/auth/sm2-public-key")
-	encryptedPassword := encryptForPublicKey(t, publicKey, "admin123456")
+	encryptedPassword := encryptForPublicKey(t, publicKey, testAdminPassword)
 	tokens := login(t, router, "/api/client/v1/auth/login", encryptedPassword)
 	return router, database, tokens
 }

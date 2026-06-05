@@ -2,7 +2,6 @@ package control
 
 import (
 	"context"
-	"crypto/tls"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -27,6 +26,7 @@ const (
 	defaultHeartbeatInterval = 15 * time.Second
 	authTimeout              = 10 * time.Second
 	writeTimeout             = 10 * time.Second
+	serverTunnelStoppedError = "服务端暂停了隧道连接，请通知服务端人员启动隧道。"
 )
 
 type Options struct {
@@ -284,26 +284,7 @@ func (m *Manager) connectAndServe(ctx context.Context, connection model.ServerCo
 func (m *Manager) dial(ctx context.Context, connection model.ServerConnection) (net.Conn, error) {
 	addr := net.JoinHostPort(connection.ServerHost, strconv.Itoa(connection.ServerPort))
 	dialer := &net.Dialer{Timeout: m.options.DialTimeout}
-	if !connection.UseTLS {
-		return dialer.DialContext(ctx, "tcp", addr)
-	}
-
-	rawConn, err := dialer.DialContext(ctx, "tcp", addr)
-	if err != nil {
-		return nil, err
-	}
-	tlsConn := tls.Client(rawConn, &tls.Config{
-		ServerName:         connection.ServerHost,
-		MinVersion:         tls.VersionTLS12,
-		InsecureSkipVerify: true,
-	})
-	handshakeCtx, cancel := context.WithTimeout(ctx, m.options.DialTimeout)
-	defer cancel()
-	if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
-		_ = rawConn.Close()
-		return nil, err
-	}
-	return tlsConn, nil
+	return dialer.DialContext(ctx, "tcp", addr)
 }
 
 func (m *Manager) serveControlMessages(ctx context.Context, connectionID int64, conn net.Conn, heartbeatInterval time.Duration) error {
@@ -389,8 +370,13 @@ func (m *Manager) handleMessage(ctx context.Context, connectionID int64, writer 
 			return err
 		}
 		return nil
-	case protocol.TypeTunnelStart, protocol.TypeTunnelStop:
+	case protocol.TypeTunnelStart:
 		m.logInfo("received control command server_connection_id=%d type=%s request_id=%s", connectionID, message.Type, message.RequestID)
+		return nil
+	case protocol.TypeTunnelStop:
+		m.logInfo("received control command server_connection_id=%d type=%s request_id=%s", connectionID, message.Type, message.RequestID)
+		_ = db.MarkServerConnectionError(ctx, m.database, connectionID, serverTunnelStoppedError)
+		m.closeDataConnectionsForServer(connectionID)
 		return nil
 	case protocol.TypeError:
 		protocolErr, _ := protocol.DecodePayload[protocol.ProtocolError](message)
@@ -439,11 +425,12 @@ type controlWriter struct {
 }
 
 type activeDataConnection struct {
-	connectionID string
-	dataConn     net.Conn
-	localConn    net.Conn
-	mu           sync.Mutex
-	closeOnce    sync.Once
+	connectionID       string
+	serverConnectionID int64
+	dataConn           net.Conn
+	localConn          net.Conn
+	mu                 sync.Mutex
+	closeOnce          sync.Once
 }
 
 func (w *controlWriter) write(message protocol.Message) error {

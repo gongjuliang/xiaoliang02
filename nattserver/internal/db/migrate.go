@@ -18,9 +18,6 @@ type migration struct {
 	SQL     string
 }
 
-const defaultAdminUsername = "admin"
-const defaultAdminPassword = "admin123456"
-
 var serverMigrations = []migration{
 	{
 		Version: 1,
@@ -283,7 +280,13 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		}
 	}
 
-	if err := seedDefaultAdmin(ctx, database, log); err != nil {
+	if err := resetLegacyPasswordHashes(ctx, database, "NATT_SERVER_ADMIN_PASSWORD", log); err != nil {
+		return err
+	}
+	if err := migrateLegacyTunnelSecretHashes(ctx, database, log); err != nil {
+		return err
+	}
+	if err := disableLegacyClientSecretHashes(ctx, database, log); err != nil {
 		return err
 	}
 	return nil
@@ -317,38 +320,148 @@ func applyMigration(ctx context.Context, database *sql.DB, item migration) error
 	return tx.Commit()
 }
 
-func seedDefaultAdmin(ctx context.Context, database *sql.DB, log *logger.Logger) error {
-	var count int
-	if err := database.QueryRowContext(ctx, "SELECT COUNT(1) FROM users").Scan(&count); err != nil {
-		return fmt.Errorf("count users: %w", err)
-	}
-	if count > 0 {
-		return nil
+func resetLegacyPasswordHashes(ctx context.Context, database *sql.DB, passwordEnv string, log *logger.Logger) error {
+	rows, err := database.QueryContext(ctx, "SELECT id, password_hash FROM users;")
+	if err != nil {
+		return fmt.Errorf("query user password hashes: %w", err)
 	}
 
-	// The default admin is created only once. Environment variables are read at
-	// first boot so production can avoid shipping the documented dev password.
-	username := strings.TrimSpace(os.Getenv("NATT_SERVER_ADMIN_USERNAME"))
-	if username == "" {
-		username = defaultAdminUsername
+	var legacyUserIDs []int64
+	for rows.Next() {
+		var id int64
+		var passwordHash string
+		if err := rows.Scan(&id, &passwordHash); err != nil {
+			return fmt.Errorf("scan user password hash: %w", err)
+		}
+		if auth.IsCurrentPasswordHash(passwordHash) {
+			continue
+		}
+		legacyUserIDs = append(legacyUserIDs, id)
 	}
-	password := os.Getenv("NATT_SERVER_ADMIN_PASSWORD")
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate user password hashes: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close user password hash rows: %w", err)
+	}
+
+	password := strings.TrimSpace(os.Getenv(passwordEnv))
 	if password == "" {
-		password = defaultAdminPassword
+		if len(legacyUserIDs) > 0 && log != nil {
+			log.Infof("legacy password hashes found but %s is not set; keeping existing hashes", passwordEnv)
+		}
+		return nil
 	}
-	hash, err := auth.HashPassword(password)
+	for _, id := range legacyUserIDs {
+		newHash, err := auth.HashPassword(password)
+		if err != nil {
+			return fmt.Errorf("hash reset password: %w", err)
+		}
+		if _, err := database.ExecContext(ctx, "UPDATE users SET password_hash = ? WHERE id = ?;", newHash, id); err != nil {
+			return fmt.Errorf("reset legacy user password hash: %w", err)
+		}
+		if log != nil {
+			log.Infof("reset legacy password hash user_id=%d", id)
+		}
+	}
+	return nil
+}
+
+func migrateLegacyTunnelSecretHashes(ctx context.Context, database *sql.DB, log *logger.Logger) error {
+	rows, err := database.QueryContext(ctx, "SELECT id, secret_hash, COALESCE(secret_plain, '') FROM tunnel_keys;")
 	if err != nil {
-		return fmt.Errorf("hash default admin password: %w", err)
+		return fmt.Errorf("query tunnel secret hashes: %w", err)
 	}
-	if _, err := database.ExecContext(ctx, `
-INSERT INTO users(username, password_hash, role)
-VALUES(?, ?, 'admin');`, username, hash); err != nil {
-		return fmt.Errorf("insert default admin: %w", err)
+	defer rows.Close()
+
+	type update struct {
+		id          int64
+		secretHash  string
+		secretHint  string
+		disableOnly bool
 	}
-	if log != nil {
-		log.Infof("default admin initialized username=%s", username)
-		if password == defaultAdminPassword {
-			log.Infof("default admin uses initial password; change it before production use")
+	var updates []update
+	for rows.Next() {
+		var id int64
+		var secretHash string
+		var secretPlain string
+		if err := rows.Scan(&id, &secretHash, &secretPlain); err != nil {
+			return fmt.Errorf("scan tunnel secret hash: %w", err)
+		}
+		if auth.IsCurrentPasswordHash(secretHash) {
+			continue
+		}
+		secretPlain = strings.TrimSpace(secretPlain)
+		if secretPlain == "" {
+			updates = append(updates, update{id: id, disableOnly: true})
+			continue
+		}
+		newHash, err := auth.HashPassword(secretPlain)
+		if err != nil {
+			return fmt.Errorf("hash tunnel secret: %w", err)
+		}
+		updates = append(updates, update{id: id, secretHash: newHash, secretHint: auth.SecretHint(secretPlain)})
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate tunnel secret hashes: %w", err)
+	}
+
+	for _, item := range updates {
+		if item.disableOnly {
+			if _, err := database.ExecContext(ctx, `
+UPDATE tunnel_keys
+SET status = 'disabled', online_status = 'offline'
+WHERE id = ?;`, item.id); err != nil {
+				return fmt.Errorf("disable legacy tunnel key: %w", err)
+			}
+			if log != nil {
+				log.Infof("disabled legacy tunnel key without secret_plain key_id=%d", item.id)
+			}
+			continue
+		}
+		if _, err := database.ExecContext(ctx, `
+UPDATE tunnel_keys
+SET secret_hash = ?, secret_hint = ?
+WHERE id = ?;`, item.secretHash, item.secretHint, item.id); err != nil {
+			return fmt.Errorf("migrate tunnel secret hash: %w", err)
+		}
+		if log != nil {
+			log.Infof("migrated tunnel secret hash key_id=%d", item.id)
+		}
+	}
+	return nil
+}
+
+func disableLegacyClientSecretHashes(ctx context.Context, database *sql.DB, log *logger.Logger) error {
+	rows, err := database.QueryContext(ctx, "SELECT id, secret_hash FROM clients;")
+	if err != nil {
+		return fmt.Errorf("query client secret hashes: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		var secretHash string
+		if err := rows.Scan(&id, &secretHash); err != nil {
+			return fmt.Errorf("scan client secret hash: %w", err)
+		}
+		if !auth.IsCurrentPasswordHash(secretHash) {
+			ids = append(ids, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate client secret hashes: %w", err)
+	}
+	for _, id := range ids {
+		if _, err := database.ExecContext(ctx, `
+UPDATE clients
+SET status = 'disabled', online_status = 'offline'
+WHERE id = ?;`, id); err != nil {
+			return fmt.Errorf("disable legacy client secret hash: %w", err)
+		}
+		if log != nil {
+			log.Infof("disabled legacy client secret hash client_id=%d", id)
 		}
 	}
 	return nil
