@@ -14,6 +14,9 @@ app:
 http:
   host: 127.0.0.1
   port: 19091
+  https_enabled: true
+  cert_file: ssl/../ssl/client.crt
+  key_file: ssl/../ssl/client.key
 database:
   path: data/../data/client.db
 log:
@@ -34,7 +37,10 @@ const clientJSONConfig = `{
   },
   "http": {
     "host": "127.0.0.1",
-    "port": 19091
+    "port": 19091,
+    "https_enabled": true,
+    "cert_file": "ssl/../ssl/client.crt",
+    "key_file": "ssl/../ssl/client.key"
   },
   "database": {
     "path": "data/../data/client.db"
@@ -102,6 +108,12 @@ func TestDefaultUsesNewStartupPorts(t *testing.T) {
 	cfg := Default()
 	if cfg.HTTP.Port != 25520 {
 		t.Fatalf("http.port=%d want 25520", cfg.HTTP.Port)
+	}
+	if cfg.HTTP.HTTPSEnabled {
+		t.Fatal("http.https_enabled default must be false")
+	}
+	if cfg.HTTP.CertFile != filepath.Clean("ssl/web.crt") || cfg.HTTP.KeyFile != filepath.Clean("ssl/web.key") {
+		t.Fatalf("default HTTPS files=%q,%q want ssl/web.crt,ssl/web.key", cfg.HTTP.CertFile, cfg.HTTP.KeyFile)
 	}
 	if cfg.ServerDefaults.ControlPort != 25511 {
 		t.Fatalf("server_defaults.control_port=%d want 25511", cfg.ServerDefaults.ControlPort)
@@ -241,6 +253,15 @@ func assertLoadedClientConfig(t *testing.T, cfg *Config) {
 	}
 	if cfg.Auth.SM2PrivateKeyFile != filepath.Clean("data/../keys/private.pem") {
 		t.Fatalf("private key file=%q", cfg.Auth.SM2PrivateKeyFile)
+	}
+	if !cfg.HTTP.HTTPSEnabled {
+		t.Fatal("http.https_enabled should load true")
+	}
+	if cfg.HTTP.CertFile != filepath.Clean("ssl/../ssl/client.crt") {
+		t.Fatalf("cert file=%q", cfg.HTTP.CertFile)
+	}
+	if cfg.HTTP.KeyFile != filepath.Clean("ssl/../ssl/client.key") {
+		t.Fatalf("key file=%q", cfg.HTTP.KeyFile)
 	}
 	if cfg.ServerDefaults.ServerHost != "10.0.0.10" ||
 		cfg.ServerDefaults.ControlPort != 17000 ||

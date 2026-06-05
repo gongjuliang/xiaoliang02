@@ -63,6 +63,11 @@ textarea {
     gap: 12px;
 }
 
+.brand-block > div:last-child,
+.sidebar-brand > div:last-child {
+    min-width: 0;
+}
+
 .brand-block {
     margin-bottom: 28px;
 }
@@ -71,6 +76,11 @@ textarea {
 .topbar h2 {
     margin: 0;
     line-height: 1.2;
+}
+
+.brand-block h1 {
+    font-size: 20px;
+    overflow-wrap: anywhere;
 }
 
 .brand-block p,
@@ -167,6 +177,13 @@ textarea {
     display: block;
 }
 
+.sidebar-brand strong {
+    font-size: 14px;
+    line-height: 1.25;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
 .sidebar-brand span {
     color: #9fb1c5;
     font-size: 12px;
@@ -232,6 +249,15 @@ textarea {
     width: auto;
     min-height: auto;
     margin: 0;
+}
+
+.terms-row {
+    margin: 2px 0 14px;
+}
+
+.terms-row span {
+    color: var(--text);
+    font-size: 13px;
 }
 
 .content {

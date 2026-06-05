@@ -337,8 +337,22 @@ func assertResponseMessageContains(t *testing.T, rec *httptest.ResponseRecorder,
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response message: %v", err)
 	}
+	want = normalizeExpectedMessage(want)
 	if !strings.Contains(resp.Message, want) {
 		t.Fatalf("response message=%q want contains %q body=%s", resp.Message, want, rec.Body.String())
+	}
+}
+
+func normalizeExpectedMessage(want string) string {
+	switch want {
+	case "鐧诲綍澶辫触娆℃暟杩囧":
+		return "登录失败次数过多"
+	case "5 鍒嗛挓":
+		return "5 分钟"
+	case "楠岃瘉鐮佷笉姝ｇ‘鎴栧凡杩囨湡":
+		return "验证码不正确或已过期"
+	default:
+		return want
 	}
 }
 

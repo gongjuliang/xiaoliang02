@@ -107,6 +107,10 @@
 
     $("#loginForm").on("submit", function (e) {
         e.preventDefault();
+        if (!$('[name="agree_terms"]').prop("checked")) {
+            $("#loginError").text("请先阅读并同意用户协议");
+            return;
+        }
         var encryptedPassword = "";
         try {
             encryptedPassword = encryptPasswordForLogin($('[name="password"]').val());
@@ -120,7 +124,8 @@
             username: $.trim($('[name="username"]').val()),
             password: encryptedPassword,
             captcha_id: captchaID,
-            captcha_code: $('[name="captcha_code"]').val()
+            captcha_code: $('[name="captcha_code"]').val(),
+            agree_terms: $('[name="agree_terms"]').prop("checked")
         };
         request("POST", "/auth/login", payload).then(function (data) {
             localStorage.setItem(tokenKey, data.access_token || "");

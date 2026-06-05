@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"nattserver/internal/config"
@@ -15,6 +16,9 @@ type Server struct {
 	server          *http.Server
 	shutdownTimeout time.Duration
 	log             *logger.Logger
+	httpsEnabled    bool
+	certFile        string
+	keyFile         string
 }
 
 func New(cfg config.HTTPConfig, handler http.Handler, log *logger.Logger) *Server {
@@ -28,16 +32,33 @@ func New(cfg config.HTTPConfig, handler http.Handler, log *logger.Logger) *Serve
 		},
 		shutdownTimeout: time.Duration(cfg.ShutdownTimeoutSeconds) * time.Second,
 		log:             log,
+		httpsEnabled:    cfg.HTTPSEnabled,
+		certFile:        cfg.CertFile,
+		keyFile:         cfg.KeyFile,
 	}
 }
 
 func (s *Server) Run(ctx context.Context) error {
+	if s.httpsEnabled {
+		if err := validateTLSFiles(s.certFile, s.keyFile); err != nil {
+			return err
+		}
+	}
 	errCh := make(chan error, 1)
 	go func() {
 		if s.log != nil {
-			s.log.Infof("http server listening on %s", s.server.Addr)
+			scheme := "http"
+			if s.httpsEnabled {
+				scheme = "https"
+			}
+			s.log.Infof("%s server listening on %s", scheme, s.server.Addr)
 		}
-		err := s.server.ListenAndServe()
+		var err error
+		if s.httpsEnabled {
+			err = s.server.ListenAndServeTLS(s.certFile, s.keyFile)
+		} else {
+			err = s.server.ListenAndServe()
+		}
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 			return
@@ -56,4 +77,14 @@ func (s *Server) Run(ctx context.Context) error {
 	case err := <-errCh:
 		return err
 	}
+}
+
+func validateTLSFiles(certFile string, keyFile string) error {
+	if _, err := os.Stat(certFile); err != nil {
+		return fmt.Errorf("HTTPS证书文件不存在或不可读取: %s", certFile)
+	}
+	if _, err := os.Stat(keyFile); err != nil {
+		return fmt.Errorf("HTTPS私钥文件不存在或不可读取: %s", keyFile)
+	}
+	return nil
 }

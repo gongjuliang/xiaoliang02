@@ -21,20 +21,17 @@ import (
 func TestInitHandlerCreatesConfigFilesAndDatabase(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
-	cfg := config.Default()
-	cfg.Database.Path = filepath.Join("data", "init-server.db")
-	cfg.Log.Dir = "logs"
-	cfg.Auth.SM2PrivateKeyFile = filepath.Join("data", "sm2_private.pem")
-	cfg.Auth.SM2PublicKeyFile = filepath.Join("data", "sm2_public.pem")
+	cfg := serverInitTestConfig()
 
 	done := make(chan *config.Config, 1)
 	handler := NewInitHandler(cfg, done)
 
 	page := httptest.NewRecorder()
 	handler.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/init.html", nil))
-	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "初始化 NATT Server") {
+	if page.Code != http.StatusOK {
 		t.Fatalf("init page status=%d body=%s", page.Code, page.Body.String())
 	}
+	assertContainsAll(t, page.Body.String(), "初始化 工具人小良-内网穿透服务端", "web_https_enabled", "已阅读并同意《用户协议》")
 
 	status := httptest.NewRecorder()
 	handler.ServeHTTP(status, httptest.NewRequest(http.MethodGet, "/api/init/status", nil))
@@ -73,6 +70,9 @@ func TestInitHandlerCreatesConfigFilesAndDatabase(t *testing.T) {
 	if generated.App.Environment != "production" {
 		t.Fatalf("generated environment=%q want production", generated.App.Environment)
 	}
+	if generated.HTTP.HTTPSEnabled {
+		t.Fatal("HTTPS should be disabled when init request does not enable it")
+	}
 	for _, path := range []string{cfg.Database.Path, cfg.Auth.SM2PrivateKeyFile, cfg.Auth.SM2PublicKeyFile} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("expected initialized file %s: %v", path, err)
@@ -92,14 +92,91 @@ func TestInitHandlerCreatesConfigFilesAndDatabase(t *testing.T) {
 	}
 }
 
+func TestInitHandlerGeneratesHTTPSCertificate(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	cfg := serverInitTestConfig()
+
+	handler := NewInitHandler(cfg, make(chan *config.Config, 1))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/init/config", strings.NewReader(validServerInitBody(t, cfg, map[string]any{
+		"web_https_enabled": true,
+		"web_https_mode":    "auto",
+	}))))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("init post status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	content, err := os.ReadFile(config.DefaultPath)
+	if err != nil {
+		t.Fatalf("read generated config: %v", err)
+	}
+	var generated config.Config
+	if err := json.Unmarshal(content, &generated); err != nil {
+		t.Fatalf("decode generated config: %v", err)
+	}
+	if !generated.HTTP.HTTPSEnabled {
+		t.Fatal("generated config should enable HTTPS")
+	}
+	for _, path := range []string{filepath.Clean("ssl/web.crt"), filepath.Clean("ssl/web.key")} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected HTTPS file %s: %v", path, err)
+		}
+	}
+}
+
+func TestInitHandlerAcceptsManualHTTPSCertificate(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	cfg := serverInitTestConfig()
+	certPEM, keyPEM, err := generateSelfSignedCertificate("127.0.0.1")
+	if err != nil {
+		t.Fatalf("generate test certificate: %v", err)
+	}
+
+	handler := NewInitHandler(cfg, make(chan *config.Config, 1))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/init/config", strings.NewReader(validServerInitBody(t, cfg, map[string]any{
+		"web_https_enabled":  true,
+		"web_https_mode":     "manual",
+		"web_https_cert_pem": string(certPEM),
+		"web_https_key_pem":  string(keyPEM),
+	}))))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("init post status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	for _, path := range []string{filepath.Clean("ssl/web.crt"), filepath.Clean("ssl/web.key")} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected manual HTTPS file %s: %v", path, err)
+		}
+	}
+}
+
+func TestInitHandlerRejectsInvalidManualHTTPSCertificate(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	cfg := serverInitTestConfig()
+
+	handler := NewInitHandler(cfg, make(chan *config.Config, 1))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/init/config", strings.NewReader(validServerInitBody(t, cfg, map[string]any{
+		"web_https_enabled":  true,
+		"web_https_mode":     "manual",
+		"web_https_cert_pem": "",
+		"web_https_key_pem":  "",
+	}))))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "请填写 HTTPS 证书和私钥") {
+		t.Fatalf("body=%s want manual HTTPS validation message", rec.Body.String())
+	}
+}
+
 func TestInitHandlerRejectsInvalidAdminSetup(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
-	cfg := config.Default()
-	cfg.Database.Path = filepath.Join("data", "init-server.db")
-	cfg.Log.Dir = "logs"
-	cfg.Auth.SM2PrivateKeyFile = filepath.Join("data", "sm2_private.pem")
-	cfg.Auth.SM2PublicKeyFile = filepath.Join("data", "sm2_public.pem")
+	cfg := serverInitTestConfig()
 
 	handler := NewInitHandler(cfg, make(chan *config.Config, 1))
 	cases := []struct {
@@ -141,12 +218,10 @@ func TestInitializationURLUsesLoopbackForWildcardHost(t *testing.T) {
 func TestRunInitializationReturnsSubmittedConfig(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
-	cfg := config.Default()
+	cfg := serverInitTestConfig()
 	cfg.HTTP.Host = "127.0.0.1"
 	cfg.HTTP.Port = freeTCPPort(t)
 	cfg.Database.Path = filepath.Join("data", "init-run.db")
-	cfg.Auth.SM2PrivateKeyFile = filepath.Join("data", "sm2_private.pem")
-	cfg.Auth.SM2PublicKeyFile = filepath.Join("data", "sm2_public.pem")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -182,6 +257,15 @@ func TestRunInitializationReturnsSubmittedConfig(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for initialization")
 	}
+}
+
+func serverInitTestConfig() *config.Config {
+	cfg := config.Default()
+	cfg.Database.Path = filepath.Join("data", "init-server.db")
+	cfg.Log.Dir = "logs"
+	cfg.Auth.SM2PrivateKeyFile = filepath.Join("data", "sm2_private.pem")
+	cfg.Auth.SM2PublicKeyFile = filepath.Join("data", "sm2_public.pem")
+	return cfg
 }
 
 func validServerInitBody(t *testing.T, cfg *config.Config, overrides map[string]any) string {
@@ -235,4 +319,13 @@ func postWithRetry(url string, body string) (*http.Response, error) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	return nil, lastErr
+}
+
+func assertContainsAll(t *testing.T, body string, values ...string) {
+	t.Helper()
+	for _, want := range values {
+		if !strings.Contains(body, want) {
+			t.Fatalf("body missing %q: %s", want, body)
+		}
+	}
 }

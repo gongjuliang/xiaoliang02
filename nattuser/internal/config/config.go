@@ -37,6 +37,9 @@ type AppConfig struct {
 type HTTPConfig struct {
 	Host                   string `yaml:"host" json:"host"`
 	Port                   int    `yaml:"port" json:"port"`
+	HTTPSEnabled           bool   `yaml:"https_enabled" json:"https_enabled"`
+	CertFile               string `yaml:"cert_file" json:"cert_file"`
+	KeyFile                string `yaml:"key_file" json:"key_file"`
 	ReadTimeoutSeconds     int    `yaml:"read_timeout_seconds" json:"read_timeout_seconds"`
 	WriteTimeoutSeconds    int    `yaml:"write_timeout_seconds" json:"write_timeout_seconds"`
 	IdleTimeoutSeconds     int    `yaml:"idle_timeout_seconds" json:"idle_timeout_seconds"`
@@ -97,6 +100,8 @@ func Load(path string) (*Config, error) {
 	}
 	cfg.Database.Path = cleanPath(cfg.Database.Path)
 	cfg.Log.Dir = cleanPath(cfg.Log.Dir)
+	cfg.HTTP.CertFile = cleanPath(cfg.HTTP.CertFile)
+	cfg.HTTP.KeyFile = cleanPath(cfg.HTTP.KeyFile)
 	cfg.Auth.SM2PrivateKeyFile = cleanPath(cfg.Auth.SM2PrivateKeyFile)
 	cfg.Auth.SM2PublicKeyFile = cleanPath(cfg.Auth.SM2PublicKeyFile)
 	return cfg, nil
@@ -134,6 +139,9 @@ func Default() *Config {
 		HTTP: HTTPConfig{
 			Host:                   "127.0.0.1",
 			Port:                   25520,
+			HTTPSEnabled:           false,
+			CertFile:               filepath.Join("ssl", "web.crt"),
+			KeyFile:                filepath.Join("ssl", "web.key"),
 			ReadTimeoutSeconds:     10,
 			WriteTimeoutSeconds:    10,
 			IdleTimeoutSeconds:     60,
@@ -168,6 +176,14 @@ func (c *Config) Validate() error {
 	}
 	if !validPort(c.HTTP.Port) {
 		return fmt.Errorf("http.port must be between 1 and 65535")
+	}
+	if c.HTTP.HTTPSEnabled {
+		if strings.TrimSpace(c.HTTP.CertFile) == "" {
+			return fmt.Errorf("http.cert_file is required when HTTPS is enabled")
+		}
+		if strings.TrimSpace(c.HTTP.KeyFile) == "" {
+			return fmt.Errorf("http.key_file is required when HTTPS is enabled")
+		}
 	}
 	if c.Database.Path == "" {
 		return fmt.Errorf("database.path is required")

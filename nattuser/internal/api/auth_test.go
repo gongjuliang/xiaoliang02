@@ -161,6 +161,19 @@ func TestAuthSecurityIntegration(t *testing.T) {
 	})
 }
 
+func TestLoginRequiresAgreeingToTerms(t *testing.T) {
+	router, database, _ := newAuthTestRouter(t, func(cfg *config.Config) {
+		cfg.App.Environment = "development"
+	})
+
+	rec := loginWithAgreement(t, router, "/api/client/v1/auth/login", testAdminUsername, testAdminPassword, false)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("terms login status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	assertResponseMessageContains(t, rec, "请先阅读并同意用户协议")
+	assertAuditLogCount(t, database, 0)
+}
+
 func newAuthTestRouter(t *testing.T, configure func(*config.Config)) (http.Handler, *sql.DB, string) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -279,17 +292,28 @@ func login(t *testing.T, router http.Handler, path string, encryptedPassword str
 
 func loginWithStatus(t *testing.T, router http.Handler, path string, username string, encryptedPassword string) *httptest.ResponseRecorder {
 	t.Helper()
+	return loginWithAgreement(t, router, path, username, encryptedPassword, true)
+}
+
+func loginWithAgreement(t *testing.T, router http.Handler, path string, username string, encryptedPassword string, agreeTerms bool) *httptest.ResponseRecorder {
+	t.Helper()
 	captcha := fetchCaptcha(t, router, strings.TrimSuffix(path, "/login")+"/captcha")
-	return loginWithStatusWithCaptcha(t, router, path, username, encryptedPassword, captcha.ID, solveCaptcha(t, captcha.ID))
+	return loginWithStatusWithCaptchaAndAgreement(t, router, path, username, encryptedPassword, captcha.ID, solveCaptcha(t, captcha.ID), agreeTerms)
 }
 
 func loginWithStatusWithCaptcha(t *testing.T, router http.Handler, path string, username string, encryptedPassword string, captchaID string, captchaCode string) *httptest.ResponseRecorder {
 	t.Helper()
-	body, err := json.Marshal(map[string]string{
+	return loginWithStatusWithCaptchaAndAgreement(t, router, path, username, encryptedPassword, captchaID, captchaCode, true)
+}
+
+func loginWithStatusWithCaptchaAndAgreement(t *testing.T, router http.Handler, path string, username string, encryptedPassword string, captchaID string, captchaCode string, agreeTerms bool) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{
 		"username":     username,
 		"password":     encryptedPassword,
 		"captcha_id":   captchaID,
 		"captcha_code": captchaCode,
+		"agree_terms":  agreeTerms,
 	})
 	if err != nil {
 		t.Fatalf("marshal login body: %v", err)

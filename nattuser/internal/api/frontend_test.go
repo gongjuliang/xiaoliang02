@@ -31,11 +31,12 @@ func TestRouterServesEmbeddedFrontend(t *testing.T) {
 	router := NewRouter(cfg, database, nil)
 
 	index := getFrontend(t, router, "/")
-	assertContainsAll(t, index, "NATT Client", "sessionStorage", "natt_client_active_view")
+	assertContainsAll(t, index, "工具人小良-内网穿透客户端", "客户端控制台", "sessionStorage", "natt_client_active_view")
+	assertNotContainsAny(t, index, "NATT Client", "NATT User")
 
 	for _, path := range []string{"/login.html", "/dashboard.html", "/tunnels.html", "/config.html", "/mcp.html", "/audit.html"} {
 		body := getFrontend(t, router, path)
-		if !strings.Contains(body, "NATT") && !strings.Contains(body, "NATT.requireAuth()") && !strings.Contains(body, `id="content"`) {
+		if !strings.Contains(body, "NATT.requireAuth()") && !strings.Contains(body, `id="content"`) && !strings.Contains(body, "loginForm") {
 			t.Fatalf("%s does not look like a module page: %s", path, body)
 		}
 	}
@@ -53,16 +54,17 @@ func TestRouterServesEmbeddedFrontend(t *testing.T) {
 	}
 
 	loginPage := getFrontend(t, router, "/login.html")
-	assertContainsAll(t, loginPage, "captchaImage", "captchaRefresh", "captcha_code", "/static/js/sm2.js")
+	assertContainsAll(t, loginPage, "工具人小良-内网穿透客户端", "agree_terms", "已阅读并同意《用户协议》", "captchaImage", "captchaRefresh", "captcha_code", "/static/js/sm2.js")
 	if strings.Contains(loginPage, `value="admin"`) {
 		t.Fatalf("login page must not prefill admin username: %s", loginPage)
 	}
+	assertNotContainsAny(t, loginPage, "NATT Client", "NATT User")
 
 	css := getFrontend(t, router, "/static/css/app.css")
-	assertContainsAll(t, css, ".app-shell", ".check-row")
+	assertContainsAll(t, css, ".app-shell", ".check-row", ".terms-row", "overflow-wrap: anywhere")
 
 	js := getFrontend(t, router, "/static/js/app.js")
-	assertContainsAll(t, js, "request: request", "escapeHtml: escapeHtml", "badge: badge", "logout: logout", "captcha_id", "image_url", "loadCaptcha", "loadSM2PublicKey", "encryptPasswordForLogin", "public_key_hex")
+	assertContainsAll(t, js, "request: request", "escapeHtml: escapeHtml", "badge: badge", "logout: logout", "captcha_id", "image_url", "agree_terms", "请先阅读并同意用户协议", "loadCaptcha", "loadSM2PublicKey", "encryptPasswordForLogin", "public_key_hex")
 	if strings.Contains(js, `password: $('[name="password"]').val()`) {
 		t.Fatalf("app js must not submit plaintext password directly: %s", js)
 	}
@@ -86,6 +88,15 @@ func assertContainsAll(t *testing.T, body string, values ...string) {
 	for _, want := range values {
 		if !strings.Contains(body, want) {
 			t.Fatalf("body missing %q: %s", want, body)
+		}
+	}
+}
+
+func assertNotContainsAny(t *testing.T, body string, values ...string) {
+	t.Helper()
+	for _, value := range values {
+		if strings.Contains(body, value) {
+			t.Fatalf("body must not contain %q: %s", value, body)
 		}
 	}
 }

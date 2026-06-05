@@ -34,6 +34,7 @@ type loginRequest struct {
 	Password    string `json:"password" binding:"required"`
 	CaptchaID   string `json:"captcha_id" binding:"required"`
 	CaptchaCode string `json:"captcha_code" binding:"required"`
+	AgreeTerms  bool   `json:"agree_terms"`
 }
 
 type refreshRequest struct {
@@ -138,6 +139,10 @@ func (h *AuthHandler) login(c *gin.Context) {
 	var req loginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Fail(c, http.StatusBadRequest, CodeBadRequest, "username、password、captcha_id 和 captcha_code 为必填项")
+		return
+	}
+	if !req.AgreeTerms {
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "请先阅读并同意用户协议")
 		return
 	}
 	if !h.captchaStore.Verify(req.CaptchaID, req.CaptchaCode) {
