@@ -42,7 +42,10 @@ func TestRouterServesEmbeddedFrontend(t *testing.T) {
 	}
 
 	tunnels := getFrontend(t, router, "/tunnels.html")
-	assertContainsAll(t, tunnels, "server_port", "data_port", "remote_port", "client_secret", "maskSecret", "show-secret", "renderDetailText", "show-detail", "last_error")
+	assertContainsAll(t, tunnels, "server_port", "data_port", "remote_port", "client_secret", "maskSecret", "show-secret", "renderDetailText", "show-detail", "last_error", "loadDefaults", "defaultConfig", `id="sh" class="layui-input" placeholder="请填写服务端地址"`, `id="sp" class="layui-input" type="number" value="`, `id="dp" class="layui-input" type="number" value="`)
+	if strings.Contains(tunnels, `id="sh" class="layui-input" value="127.0.0.1"`) {
+		t.Fatalf("new tunnel connection form must not prefill server host: %s", tunnels)
+	}
 
 	configPage := getFrontend(t, router, "/config.html")
 	assertContainsAll(t, configPage, "renderReadonlyConfig", "hot_reload", "currentValue", "placeholder")

@@ -39,9 +39,11 @@ D:\2025Code\ai\natt
 ```text
 nattserver/
   main.go
-  config/
-  data/
-  logs/
+  xiaoliang02_server/
+    config/
+    data/
+    logs/
+    ssl/
   Web/EmbedFiles/
   internal/
     api/
@@ -62,9 +64,11 @@ nattserver/
 ```text
 nattuser/
   main.go
-  config/
-  data/
-  logs/
+  xiaoliang02_user/
+    config/
+    data/
+    logs/
+    ssl/
   Web/EmbedFiles/
   internal/
     api/
@@ -107,24 +111,30 @@ nattuser/
 3. 服务端检查 HTTP、控制端口、数据端口。
 4. 客户端只检查本机 HTTP 端口，不检查远端 `server_defaults` 端口。
 5. 端口占用错误使用中文提示，例如 `25510端口被占用`。
-6. 默认启动时如果缺少 `config/config.json`，进入初始化页面。
+6. 默认启动时如果缺少 `xiaoliang02_server/config/config.json` 或 `xiaoliang02_user/config/config.json`，进入初始化页面。
 7. 默认启动时如果数据库不存在、`users` 表不存在或用户为空，进入初始化页面。
 8. 显式传入 `-config` 时不进入交互初始化；如果没有管理员账号，应返回中文启动错误。
 
 初始化页面要求：
 
-1. 提供管理员账号输入框，账号 trim 后不能为空。
-2. 提供管理员密码输入框，密码至少 8 位，且必须同时包含字母和数字。
-3. 提供运行模式选择：
+1. 初始化页采用两步向导。
+2. 第一步配置运行模式、各个端口、数据库路径和 Web 控制台 HTTPS。
+3. 第二步配置管理员账号、管理员密码和用户协议确认。
+4. HTTPS 关闭时隐藏证书选项。
+5. HTTPS 开启并选择自动生成测试证书时隐藏 PEM 输入框。
+6. HTTPS 开启并选择填写证书时显示证书和私钥 PEM 输入框。
+7. 提供管理员账号输入框，账号 trim 后不能为空。
+8. 提供管理员密码输入框，密码至少 8 位，且必须同时包含字母和数字。
+9. 提供运行模式选择：
    - 测试模式写入 `app.environment=development`。
    - 生产模式写入 `app.environment=production`。
-4. 提供“已阅读并同意《用户协议》”勾选项；未勾选不得提交。
-5. 初始化成功后创建配置文件、目录、SM2 密钥、SQLite 数据库和管理员账号。
-6. 不再内置默认账号 `admin` 或默认密码 `admin123456`。
+10. 提供“已阅读并同意《用户协议》”勾选项；未勾选不得提交。
+11. 初始化成功后创建配置文件、目录、SM2 密钥、SQLite 数据库和管理员账号。
+12. 不再内置默认账号 `admin` 或默认密码 `admin123456`。
 
 ## 四、配置规格
 
-1. 默认配置文件为 `config/config.json`。
+1. 默认配置文件为 `xiaoliang02_server/config/config.json` 或 `xiaoliang02_user/config/config.json`。
 2. 显式传入 `.yaml` 或 `.yml` 时仍兼容 YAML 读取。
 3. 默认启动不再自动回退 YAML；缺少 JSON 时进入初始化页面。
 4. 配置结构体同时保留 `json` 和 `yaml` tag。
@@ -362,20 +372,20 @@ MCP 返回要求：
 
 普通日志：
 
-1. 写入 `logs/YYYY-MM-DD.log`。
+1. 服务端写入 `xiaoliang02_server/logs/YYYY-MM-DD.log`，客户端写入 `xiaoliang02_user/logs/YYYY-MM-DD.log`。
 2. 控制台和文件日志包含级别、文件名和行号。
 3. 示例：`[INFO] routes.go:61 server routes registered`。
 
 审计日志：
 
-1. 写入 `logs/audit/YYYY-MM-DD.jsonl`。
+1. 服务端写入 `xiaoliang02_server/logs/audit/YYYY-MM-DD.jsonl`，客户端写入 `xiaoliang02_user/logs/audit/YYYY-MM-DD.jsonl`。
 2. 每行一个 JSON 对象。
 3. 后台审计页面从 JSONL 文件读取并分页展示。
 4. 审计需要覆盖登录、配置修改、秘钥查看、秘钥轮换、隧道启停、MCP 操作等事件。
 
 ## 十二、验收场景
 
-1. 空文件夹内启动 exe，缺少 `config/config.json` 时进入初始化页面。
+1. 空文件夹内启动 exe，缺少 `xiaoliang02_server/config/config.json` 或 `xiaoliang02_user/config/config.json` 时进入初始化页面。
 2. 初始化页面创建配置、目录、SM2 密钥、SQLite 数据库和自定义管理员账号。
 3. 生产模式登录时，前端 SM2 加密密码后可以成功登录。
 4. 明文密码在生产模式下不能登录。

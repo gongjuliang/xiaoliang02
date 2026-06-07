@@ -12,8 +12,12 @@ import (
 )
 
 const (
-	DefaultPath    = "config/config.json"
-	LegacyYAMLPath = "config/config.yaml"
+	RuntimeRoot = "xiaoliang02_user"
+)
+
+var (
+	DefaultPath    = filepath.Join(RuntimeRoot, "config", "config.json")
+	LegacyYAMLPath = filepath.Join(RuntimeRoot, "config", "config.yaml")
 )
 
 var ErrDefaultConfigMissing = errors.New("default config missing")
@@ -107,7 +111,7 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// Load("") is the normal startup path and requires config/config.json. YAML is
+// Load("") is the normal startup path and requires xiaoliang02_user/config/config.json. YAML is
 // still supported when an operator explicitly passes a .yaml/.yml config path.
 func defaultConfigPath() (string, error) {
 	if _, err := os.Stat(DefaultPath); err == nil {
@@ -134,36 +138,35 @@ func Default() *Config {
 		App: AppConfig{
 			Name:        "nattuser",
 			Version:     "0.1.0",
-			Environment: "development",
+			Environment: "production",
 		},
 		HTTP: HTTPConfig{
 			Host:                   "127.0.0.1",
 			Port:                   25520,
 			HTTPSEnabled:           false,
-			CertFile:               filepath.Join("ssl", "web.crt"),
-			KeyFile:                filepath.Join("ssl", "web.key"),
+			CertFile:               filepath.Join(RuntimeRoot, "ssl", "web.crt"),
+			KeyFile:                filepath.Join(RuntimeRoot, "ssl", "web.key"),
 			ReadTimeoutSeconds:     10,
 			WriteTimeoutSeconds:    10,
 			IdleTimeoutSeconds:     60,
 			ShutdownTimeoutSeconds: 10,
 		},
 		Database: DatabaseConfig{
-			Path: "data/nattuser.db",
+			Path: filepath.Join(RuntimeRoot, "data", "nattuser.db"),
 		},
 		Log: LogConfig{
-			Dir:   "logs",
+			Dir:   filepath.Join(RuntimeRoot, "logs"),
 			Level: "info",
 		},
 		Auth: AuthConfig{
 			JWTSecret:               "change-me-nattuser-dev-secret",
 			AccessTokenTTLMinutes:   120,
 			RefreshTokenTTLMinutes:  10080,
-			SM2PrivateKeyFile:       "data/sm2_private.pem",
-			SM2PublicKeyFile:        "data/sm2_public.pem",
+			SM2PrivateKeyFile:       filepath.Join(RuntimeRoot, "data", "sm2_private.pem"),
+			SM2PublicKeyFile:        filepath.Join(RuntimeRoot, "data", "sm2_public.pem"),
 			LoginRateLimitPerMinute: 10,
 		},
 		ServerDefaults: ServerDefaultsConfig{
-			ServerHost:  "127.0.0.1",
 			ControlPort: 25511,
 			DataPort:    25512,
 		},
@@ -208,9 +211,6 @@ func (c *Config) Validate() error {
 	}
 	if c.Auth.LoginRateLimitPerMinute <= 0 {
 		return fmt.Errorf("auth.login_rate_limit_per_minute must be greater than 0")
-	}
-	if c.ServerDefaults.ServerHost == "" {
-		return fmt.Errorf("server_defaults.server_host is required")
 	}
 	if !validPort(c.ServerDefaults.ControlPort) {
 		return fmt.Errorf("server_defaults.control_port must be between 1 and 65535")

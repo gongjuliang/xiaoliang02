@@ -45,7 +45,7 @@ func TestDefaultStartupWorkingDirectoryUsesExecutableDir(t *testing.T) {
 func TestExplicitConfigDoesNotChangeWorkingDirectory(t *testing.T) {
 	exePath := filepath.Join(t.TempDir(), "nattuser.exe")
 
-	dir, shouldChange, err := defaultStartupWorkingDirectory("config/config.json", exePath)
+	dir, shouldChange, err := defaultStartupWorkingDirectory(config.DefaultPath, exePath)
 	if err != nil {
 		t.Fatalf("default startup working directory: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestExplicitConfigWithoutAdminReturnsChineseStartupError(t *testing.T) {
 	cfg := config.Default()
 	cfg.Database.Path = filepath.Join(t.TempDir(), "nattuser.db")
 
-	_, err := ensureConsoleInitialized(ctx, "config/config.json", cfg)
+	_, err := ensureConsoleInitialized(ctx, config.DefaultPath, cfg)
 	if err == nil {
 		t.Fatal("expected explicit config without admin to fail")
 	}

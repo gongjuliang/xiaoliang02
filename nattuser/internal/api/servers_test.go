@@ -111,24 +111,34 @@ func TestServerConnectionManagementFlow(t *testing.T) {
 	assertAuditLogCount(t, database, 6)
 }
 
-func TestServerConnectionCreateUsesDefaultsAndRejectsBadPorts(t *testing.T) {
+func TestServerConnectionCreateUsesDefaultPortsRequiresServerHostAndRejectsBadPorts(t *testing.T) {
 	router, database, tokens := setupAuthenticatedClientRouter(t)
 	defer database.Close()
 
 	createResp := authorizedJSON(t, router, http.MethodPost, "/api/client/v1/tunnel-connections", tokens.AccessToken, map[string]any{
 		"name":          "defaulted",
+		"server_host":   "example.com",
 		"client_secret": "xiaoliang_default_secret",
 		"local_host":    "127.0.0.1",
 		"local_port":    8080,
 	})
 	var created model.ServerConnection
 	decodeResponseData(t, createResp, &created)
-	if created.ServerHost != "127.0.0.1" || created.ServerPort != 25511 || created.DataPort != 25512 {
+	if created.ServerHost != "example.com" || created.ServerPort != 25511 || created.DataPort != 25512 {
 		t.Fatalf("defaults were not applied: %+v", created)
 	}
 
+	missingHost := authorizedJSONAllowStatus(t, router, http.MethodPost, "/api/client/v1/tunnel-connections", tokens.AccessToken, map[string]any{
+		"name":          "missing-host",
+		"client_secret": "xiaoliang_default_secret",
+		"local_host":    "127.0.0.1",
+		"local_port":    8080,
+	}, http.StatusBadRequest)
+	assertResponseMessageContains(t, missingHost, "server_host 为必填项")
+
 	resp := authorizedJSONAllowStatus(t, router, http.MethodPost, "/api/client/v1/tunnel-connections", tokens.AccessToken, map[string]any{
 		"name":          "bad-port",
+		"server_host":   "example.com",
 		"server_port":   70000,
 		"client_secret": "xiaoliang_default_secret",
 		"local_host":    "127.0.0.1",

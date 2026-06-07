@@ -106,14 +106,36 @@ func TestLoadMergesJSONAndCleansPaths(t *testing.T) {
 
 func TestDefaultUsesNewStartupPorts(t *testing.T) {
 	cfg := Default()
+	if cfg.App.Environment != "production" {
+		t.Fatalf("app.environment=%q want production", cfg.App.Environment)
+	}
+	if DefaultPath != filepath.Clean("xiaoliang02_user/config/config.json") {
+		t.Fatalf("DefaultPath=%q want xiaoliang02_user/config/config.json", DefaultPath)
+	}
+	if LegacyYAMLPath != filepath.Clean("xiaoliang02_user/config/config.yaml") {
+		t.Fatalf("LegacyYAMLPath=%q want xiaoliang02_user/config/config.yaml", LegacyYAMLPath)
+	}
 	if cfg.HTTP.Port != 25520 {
 		t.Fatalf("http.port=%d want 25520", cfg.HTTP.Port)
 	}
 	if cfg.HTTP.HTTPSEnabled {
 		t.Fatal("http.https_enabled default must be false")
 	}
-	if cfg.HTTP.CertFile != filepath.Clean("ssl/web.crt") || cfg.HTTP.KeyFile != filepath.Clean("ssl/web.key") {
-		t.Fatalf("default HTTPS files=%q,%q want ssl/web.crt,ssl/web.key", cfg.HTTP.CertFile, cfg.HTTP.KeyFile)
+	if cfg.HTTP.CertFile != filepath.Clean("xiaoliang02_user/ssl/web.crt") || cfg.HTTP.KeyFile != filepath.Clean("xiaoliang02_user/ssl/web.key") {
+		t.Fatalf("default HTTPS files=%q,%q want xiaoliang02_user/ssl/web.crt,xiaoliang02_user/ssl/web.key", cfg.HTTP.CertFile, cfg.HTTP.KeyFile)
+	}
+	if cfg.Database.Path != filepath.Clean("xiaoliang02_user/data/nattuser.db") {
+		t.Fatalf("database.path=%q want xiaoliang02_user/data/nattuser.db", cfg.Database.Path)
+	}
+	if cfg.Log.Dir != filepath.Clean("xiaoliang02_user/logs") {
+		t.Fatalf("log.dir=%q want xiaoliang02_user/logs", cfg.Log.Dir)
+	}
+	if cfg.Auth.SM2PrivateKeyFile != filepath.Clean("xiaoliang02_user/data/sm2_private.pem") ||
+		cfg.Auth.SM2PublicKeyFile != filepath.Clean("xiaoliang02_user/data/sm2_public.pem") {
+		t.Fatalf("default SM2 files=%q,%q", cfg.Auth.SM2PrivateKeyFile, cfg.Auth.SM2PublicKeyFile)
+	}
+	if cfg.ServerDefaults.ServerHost != "" {
+		t.Fatalf("server_defaults.server_host=%q want empty default", cfg.ServerDefaults.ServerHost)
 	}
 	if cfg.ServerDefaults.ControlPort != 25511 {
 		t.Fatalf("server_defaults.control_port=%d want 25511", cfg.ServerDefaults.ControlPort)
@@ -126,13 +148,13 @@ func TestDefaultUsesNewStartupPorts(t *testing.T) {
 func TestLoadDefaultPrefersJSONAndRequiresJSON(t *testing.T) {
 	t.Run("prefers json", func(t *testing.T) {
 		dir := t.TempDir()
-		if err := os.Mkdir(filepath.Join(dir, "config"), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(dir, "xiaoliang02_user", "config"), 0o755); err != nil {
 			t.Fatalf("create config dir: %v", err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, "config", "config.yaml"), []byte("app:\n  name: yaml-default\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "xiaoliang02_user", "config", "config.yaml"), []byte("app:\n  name: yaml-default\n"), 0o644); err != nil {
 			t.Fatalf("write yaml config: %v", err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, "config", "config.json"), []byte(`{"app":{"name":"json-default"}}`), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "xiaoliang02_user", "config", "config.json"), []byte(`{"app":{"name":"json-default"}}`), 0o644); err != nil {
 			t.Fatalf("write json config: %v", err)
 		}
 		t.Chdir(dir)
@@ -148,11 +170,27 @@ func TestLoadDefaultPrefersJSONAndRequiresJSON(t *testing.T) {
 
 	t.Run("missing json enters initialization instead of yaml fallback", func(t *testing.T) {
 		dir := t.TempDir()
-		if err := os.Mkdir(filepath.Join(dir, "config"), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(dir, "xiaoliang02_user", "config"), 0o755); err != nil {
 			t.Fatalf("create config dir: %v", err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, "config", "config.yaml"), []byte("app:\n  name: yaml-default\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "xiaoliang02_user", "config", "config.yaml"), []byte("app:\n  name: yaml-default\n"), 0o644); err != nil {
 			t.Fatalf("write yaml config: %v", err)
+		}
+		t.Chdir(dir)
+
+		_, err := Load("")
+		if !errors.Is(err, ErrDefaultConfigMissing) {
+			t.Fatalf("err=%v want ErrDefaultConfigMissing", err)
+		}
+	})
+
+	t.Run("does not read old root config path", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.Mkdir(filepath.Join(dir, "config"), 0o755); err != nil {
+			t.Fatalf("create old config dir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "config", "config.json"), []byte(`{"app":{"name":"old-root-config"}}`), 0o644); err != nil {
+			t.Fatalf("write old config: %v", err)
 		}
 		t.Chdir(dir)
 

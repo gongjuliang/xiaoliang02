@@ -181,9 +181,6 @@ func (h *ServerHandler) bindAndValidate(c *gin.Context, req *serverConnectionReq
 	req.ServerHost = strings.TrimSpace(req.ServerHost)
 	req.ClientSecret = strings.TrimSpace(req.ClientSecret)
 	req.LocalHost = strings.TrimSpace(req.LocalHost)
-	if req.ServerHost == "" {
-		req.ServerHost = h.defaults.ServerHost
-	}
 	if req.ServerPort == 0 {
 		req.ServerPort = h.defaults.ControlPort
 	}

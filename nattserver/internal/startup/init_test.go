@@ -53,7 +53,18 @@ func TestInitHandlerCreatesConfigFilesAndDatabase(t *testing.T) {
 	if page.Code != http.StatusOK {
 		t.Fatalf("init page status=%d body=%s", page.Code, page.Body.String())
 	}
-	assertContainsAll(t, page.Body.String(), "初始化 工具人小良-内网穿透服务端", "web_https_enabled", "已阅读并同意《用户协议》")
+	assertContainsAll(t, page.Body.String(),
+		"初始化 工具人小良-内网穿透服务端",
+		`data-step="1"`,
+		`data-step="2"`,
+		"下一步",
+		"上一步",
+		"运行与路径配置",
+		"管理员与协议确认",
+		"web_https_enabled",
+		"manual_cert_fields",
+		"已阅读并同意《用户协议》",
+	)
 
 	status := httptest.NewRecorder()
 	handler.ServeHTTP(status, httptest.NewRequest(http.MethodGet, "/api/init/status", nil))
@@ -146,7 +157,11 @@ func TestInitHandlerGeneratesHTTPSCertificate(t *testing.T) {
 	if !generated.HTTP.HTTPSEnabled {
 		t.Fatal("generated config should enable HTTPS")
 	}
-	for _, path := range []string{filepath.Clean("ssl/web.crt"), filepath.Clean("ssl/web.key")} {
+	if generated.HTTP.CertFile != filepath.Clean(filepath.Join(config.RuntimeRoot, "ssl", "web.crt")) ||
+		generated.HTTP.KeyFile != filepath.Clean(filepath.Join(config.RuntimeRoot, "ssl", "web.key")) {
+		t.Fatalf("generated HTTPS files=%q,%q", generated.HTTP.CertFile, generated.HTTP.KeyFile)
+	}
+	for _, path := range []string{generated.HTTP.CertFile, generated.HTTP.KeyFile} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("expected HTTPS file %s: %v", path, err)
 		}
@@ -173,7 +188,7 @@ func TestInitHandlerAcceptsManualHTTPSCertificate(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("init post status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	for _, path := range []string{filepath.Clean("ssl/web.crt"), filepath.Clean("ssl/web.key")} {
+	for _, path := range []string{cfg.HTTP.CertFile, cfg.HTTP.KeyFile} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("expected manual HTTPS file %s: %v", path, err)
 		}
@@ -233,6 +248,34 @@ func TestInitHandlerRejectsInvalidAdminSetup(t *testing.T) {
 	}
 }
 
+func TestInitHTMLHasTwoStepWizardAndHidesManualCertificateFieldsForAutoMode(t *testing.T) {
+	body := serverInitHTML(config.Default())
+
+	assertContainsAll(t, body,
+		`<section class="step-panel active" data-step="1">`,
+		`<section class="step-panel" data-step="2">`,
+		`<option value="production" selected>生产模式</option>`,
+		`onclick="showStep(1)"`,
+		`onclick="goNext()"`,
+		`id="manual_cert_fields"`,
+		`style="display:none"`,
+		`function updateHTTPSOptions()`,
+	)
+}
+
+func TestServerInitHTMLUsesRequestedStepOneRows(t *testing.T) {
+	body := serverInitHTML(config.Default())
+
+	assertContainsAll(t, body,
+		`<div class="field-row two-cols" data-layout="web-listen">`,
+		`<div class="field-row two-cols" data-layout="control-listen">`,
+		`<div class="field-row two-cols" data-layout="data-listen">`,
+		`<div class="field-row single" data-layout="environment">`,
+		`<div class="field-row single" data-layout="database">`,
+		`<div class="field-row single" data-layout="web-https">`,
+	)
+}
+
 func TestInitializationURLUsesLoopbackForWildcardHost(t *testing.T) {
 	cfg := config.Default()
 	cfg.HTTP.Host = "0.0.0.0"
@@ -288,12 +331,7 @@ func TestRunInitializationReturnsSubmittedConfig(t *testing.T) {
 }
 
 func serverInitTestConfig() *config.Config {
-	cfg := config.Default()
-	cfg.Database.Path = filepath.Join("data", "init-server.db")
-	cfg.Log.Dir = "logs"
-	cfg.Auth.SM2PrivateKeyFile = filepath.Join("data", "sm2_private.pem")
-	cfg.Auth.SM2PublicKeyFile = filepath.Join("data", "sm2_public.pem")
-	return cfg
+	return config.Default()
 }
 
 func validServerInitBody(t *testing.T, cfg *config.Config, overrides map[string]any) string {

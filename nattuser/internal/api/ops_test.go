@@ -77,6 +77,7 @@ func TestClientOpsStatusAuditAndConfigFlow(t *testing.T) {
 
 	defaultedResp := authorizedJSON(t, router, http.MethodPost, "/api/client/v1/tunnel-connections", tokens.AccessToken, map[string]any{
 		"name":          "defaulted-after-config",
+		"server_host":   "example.com",
 		"client_secret": "natt_default_after_config",
 		"local_host":    "127.0.0.1",
 		"local_port":    8080,

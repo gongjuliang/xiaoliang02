@@ -26,6 +26,27 @@
 <script src="/static/js/app.js"></script>
 <script>
 if (NATT.requireAuth()) {
+    var defaultConfig = { control_port: 25511, data_port: 25512 };
+    function readCurrentConfigValue(current, key, fallback) {
+        var value = current || {};
+        String(key || "").split(".").forEach(function (part) {
+            if (value && typeof value === "object" && Object.prototype.hasOwnProperty.call(value, part)) {
+                value = value[part];
+            } else {
+                value = fallback;
+            }
+        });
+        return value == null || value === "" ? fallback : value;
+    }
+    function loadDefaults() {
+        return NATT.request("GET", "/config").then(function (d) {
+            defaultConfig.control_port = Number(readCurrentConfigValue(d.current, "server_defaults.control_port", 25511)) || 25511;
+            defaultConfig.data_port = Number(readCurrentConfigValue(d.current, "server_defaults.data_port", 25512)) || 25512;
+            return defaultConfig;
+        }).fail(function () {
+            return defaultConfig;
+        });
+    }
     function maskSecret(secret) {
         var value = String(secret || "");
         if (!value) return "-";
@@ -61,38 +82,41 @@ if (NATT.requireAuth()) {
             $("#content").html('<div class="panel"><div class="toolbar"><h3>隧道连接</h3><button id="newConn" class="layui-btn primary" type="button">新增</button></div><table class="data-table"><thead><tr><th>ID</th><th>名称</th><th>服务端地址</th><th>控制端口</th><th>数据端口</th><th>公网监听端口</th><th>服务端秘钥</th><th>本地目标</th><th>状态</th><th>状态详情</th><th>操作</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
         }).fail(NATT.showError);
     }
-    function form() {
+    function form(defaults) {
+        defaults = defaults || defaultConfig;
         return '<div class="tunnel-form">' +
             '<label>名称<input id="cn" class="layui-input" placeholder="名称"></label>' +
-            '<label>服务端地址<input id="sh" class="layui-input" value="127.0.0.1"></label>' +
-            '<label>控制端口<input id="sp" class="layui-input" type="number" value="7000"></label>' +
-            '<label>数据端口<input id="dp" class="layui-input" type="number" value="7001"></label>' +
+            '<label>服务端地址<input id="sh" class="layui-input" placeholder="请填写服务端地址"></label>' +
+            '<label>控制端口<input id="sp" class="layui-input" type="number" value="' + NATT.escapeHtml(defaults.control_port) + '"></label>' +
+            '<label>数据端口<input id="dp" class="layui-input" type="number" value="' + NATT.escapeHtml(defaults.data_port) + '"></label>' +
             '<label>服务端秘钥<input id="cs" class="layui-input" placeholder="nattserver 创建隧道后显示的 key"></label>' +
             '<label>本地地址<input id="lh" class="layui-input" value="127.0.0.1"></label>' +
             '<label>本地端口<input id="lp" class="layui-input" type="number"></label>' +
             '<label class="check-row"><input id="as" type="checkbox"><span>自启动</span></label></div>';
     }
     $("#content").on("click", "#newConn", function () {
-        layui.layer.open({
-            title: "新增隧道连接",
-            area: "620px",
-            content: form(),
-            btn: ["保存", "取消"],
-            yes: function (index) {
-                NATT.request("POST", "/tunnel-connections", {
-                    name: $("#cn").val(),
-                    server_host: $("#sh").val(),
-                    server_port: +$("#sp").val(),
-                    data_port: +$("#dp").val(),
-                    client_secret: $("#cs").val(),
-                    local_host: $("#lh").val(),
-                    local_port: +$("#lp").val(),
-                    auto_start: $("#as").prop("checked")
-                }).then(function () {
-                    layui.layer.close(index);
-                    loadConnections();
-                }).fail(NATT.showError);
-            }
+        loadDefaults().then(function (defaults) {
+            layui.layer.open({
+                title: "新增隧道连接",
+                area: "620px",
+                content: form(defaults),
+                btn: ["保存", "取消"],
+                yes: function (index) {
+                    NATT.request("POST", "/tunnel-connections", {
+                        name: $("#cn").val(),
+                        server_host: $("#sh").val(),
+                        server_port: +$("#sp").val(),
+                        data_port: +$("#dp").val(),
+                        client_secret: $("#cs").val(),
+                        local_host: $("#lh").val(),
+                        local_port: +$("#lp").val(),
+                        auto_start: $("#as").prop("checked")
+                    }).then(function () {
+                        layui.layer.close(index);
+                        loadConnections();
+                    }).fail(NATT.showError);
+                }
+            });
         });
     });
     $("#content").on("click", "button[data-act]", function () {

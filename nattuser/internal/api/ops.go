@@ -298,12 +298,6 @@ func (h *OpsHandler) applyConfigSetting(key string, value string) (configUpdateR
 			h.log.SetLevel(level)
 		}
 		return configUpdateResult{Key: key, Value: level, HotReloaded: true, RestartRequired: false}, nil
-	case "server_defaults.server_host":
-		if value == "" {
-			return configUpdateResult{}, fmt.Errorf("server_defaults.server_host 为必填项")
-		}
-		h.cfg.ServerDefaults.ServerHost = value
-		return configUpdateResult{Key: key, Value: value, HotReloaded: true, RestartRequired: false}, nil
 	case "server_defaults.control_port":
 		port, err := parsePortValue(key, value)
 		if err != nil {
@@ -372,7 +366,6 @@ func (h *OpsHandler) writeLocalTunnelDBError(c *gin.Context, err error, fallback
 func editableConfigKeys() []gin.H {
 	return []gin.H{
 		{"key": "log.level", "hot_reload": true},
-		{"key": "server_defaults.server_host", "hot_reload": true},
 		{"key": "server_defaults.control_port", "hot_reload": true},
 		{"key": "server_defaults.data_port", "hot_reload": true},
 	}

@@ -22,7 +22,7 @@ var auditStore = struct {
 	sync.RWMutex
 	dir string
 }{
-	dir: filepath.Join("logs", "audit"),
+	dir: filepath.Join("xiaoliang02_server", "logs", "audit"),
 }
 
 type auditRecord struct {

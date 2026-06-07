@@ -12,8 +12,12 @@ import (
 )
 
 const (
-	DefaultPath    = "config/config.json"
-	LegacyYAMLPath = "config/config.yaml"
+	RuntimeRoot = "xiaoliang02_server"
+)
+
+var (
+	DefaultPath    = filepath.Join(RuntimeRoot, "config", "config.json")
+	LegacyYAMLPath = filepath.Join(RuntimeRoot, "config", "config.yaml")
 )
 
 var ErrDefaultConfigMissing = errors.New("default config missing")
@@ -114,7 +118,7 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// Load("") is the normal startup path and requires config/config.json. YAML is
+// Load("") is the normal startup path and requires xiaoliang02_server/config/config.json. YAML is
 // still supported when an operator explicitly passes a .yaml/.yml config path.
 func defaultConfigPath() (string, error) {
 	if _, err := os.Stat(DefaultPath); err == nil {
@@ -141,32 +145,32 @@ func Default() *Config {
 		App: AppConfig{
 			Name:        "nattserver",
 			Version:     "0.1.0",
-			Environment: "development",
+			Environment: "production",
 		},
 		HTTP: HTTPConfig{
 			Host:                   "0.0.0.0",
 			Port:                   25510,
 			HTTPSEnabled:           false,
-			CertFile:               filepath.Join("ssl", "web.crt"),
-			KeyFile:                filepath.Join("ssl", "web.key"),
+			CertFile:               filepath.Join(RuntimeRoot, "ssl", "web.crt"),
+			KeyFile:                filepath.Join(RuntimeRoot, "ssl", "web.key"),
 			ReadTimeoutSeconds:     10,
 			WriteTimeoutSeconds:    10,
 			IdleTimeoutSeconds:     60,
 			ShutdownTimeoutSeconds: 10,
 		},
 		Database: DatabaseConfig{
-			Path: "data/nattserver.db",
+			Path: filepath.Join(RuntimeRoot, "data", "nattserver.db"),
 		},
 		Log: LogConfig{
-			Dir:   "logs",
+			Dir:   filepath.Join(RuntimeRoot, "logs"),
 			Level: "info",
 		},
 		Auth: AuthConfig{
 			JWTSecret:               "change-me-nattserver-dev-secret",
 			AccessTokenTTLMinutes:   120,
 			RefreshTokenTTLMinutes:  10080,
-			SM2PrivateKeyFile:       "data/sm2_private.pem",
-			SM2PublicKeyFile:        "data/sm2_public.pem",
+			SM2PrivateKeyFile:       filepath.Join(RuntimeRoot, "data", "sm2_private.pem"),
+			SM2PublicKeyFile:        filepath.Join(RuntimeRoot, "data", "sm2_public.pem"),
 			LoginRateLimitPerMinute: 10,
 		},
 		Protocol: ProtocolConfig{
