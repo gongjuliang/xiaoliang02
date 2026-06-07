@@ -1,0 +1,4 @@
+﻿interface:
+  display_name: "С��������͸��Ŀ"
+  short_description: "ά�� xiaoliang02 NATT �������ͻ���"
+  default_prompt: "Use $xiaoliang02-natt to inspect, modify, test, or troubleshoot the xiaoliang02 NATT project."
