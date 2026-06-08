@@ -12,7 +12,6 @@ Use this skill when working on the `xiaoliang02` intranet penetration project. P
 - Workspace root: `D:\2025Code\ai\natt`.
 - Service project: `nattserver`.
 - Client project: `nattuser`.
-- Reference project: `commonGin`.
 - Runtime roots:
   - Server: `xiaoliang02_server/`.
   - Client: `xiaoliang02_user/`.

@@ -6,7 +6,6 @@
 D:\2025Code\ai\natt
   nattserver\    Public server, Web console, public listeners, client auth, tunnel runtime
   nattuser\      Intranet client, Web console, server connection config, local forwarding
-  commonGin\     Reference project
   skills\        AI-facing project skills
 ```
 

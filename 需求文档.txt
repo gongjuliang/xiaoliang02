@@ -44,7 +44,6 @@
 D:\2025Code\ai\natt
   nattserver\    服务端项目
   nattuser\      客户端项目
-  commonGin\     公共参考项目
   skills\        项目 AI Skill
 ```
 
