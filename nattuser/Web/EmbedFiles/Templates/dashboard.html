@@ -7,14 +7,27 @@
     <link rel="stylesheet" href="/static/layui/css/layui.css">
     <link rel="stylesheet" href="/static/css/app.css">
     <style>
-        body { min-height: auto; padding: 22px 24px; }
+        body { min-height: auto; padding: 22px 24px; position: relative; }
         .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; }
         .metric { background: #fff; border: 1px solid #e8edf3; border-radius: 6px; padding: 16px; }
         .metric b { display: block; font-size: 24px; margin-top: 8px; }
+        .footer-notice {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: #fff;
+            border-top: 1px solid #e8edf3;
+            padding: 12px 24px;
+            font-size: 14px;
+            color: #64748b;
+            text-align: center;
+        }
     </style>
 </head>
 <body>
 <div id="content"></div>
+<div class="footer-notice">请遵守<a href="/agreement.html" target="_blank" rel="noopener" style="color: blue">《用户协议》</a>，禁止利用本软件从事任何触犯中华人民共和国及其本软件部署地相关法律法规的行为。</div>
 <script src="/static/js/jquery/jquery-3.6.0.min.js"></script>
 <script src="/static/layui/layui.js"></script>
 <script src="/static/js/app.js"></script>
