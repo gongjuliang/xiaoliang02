@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>工具人小良内网穿透 - 用户协议</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+            line-height: 1.8;
+            color: #333;
+            background-color: #f5f5f5;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            padding: 40px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        h1 {
+            text-align: center;
+            color: #2c3e50;
+            margin-bottom: 30px;
+            font-size: 2em;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 15px;
+        }
+
+        .version-info {
+            text-align: center;
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 0.9em;
+        }
+
+        hr {
+            border: none;
+            border-top: 1px solid #eee;
+            margin: 30px 0;
+        }
+
+        h2 {
+            color: #2c3e50;
+            margin-top: 35px;
+            margin-bottom: 20px;
+            font-size: 1.6em;
+            border-left: 4px solid #3498db;
+            padding-left: 15px;
+        }
+
+        h3 {
+            color: #34495e;
+            margin-top: 25px;
+            margin-bottom: 15px;
+            font-size: 1.3em;
+        }
+
+        p {
+            margin-bottom: 15px;
+            text-align: justify;
+        }
+
+        strong {
+            color: #e74c3c;
+            font-weight: 600;
+        }
+
+        ul, ol {
+            margin-left: 30px;
+            margin-bottom: 15px;
+        }
+
+        li {
+            margin-bottom: 8px;
+        }
+
+        .highlight {
+            background-color: #fff3cd;
+            padding: 15px;
+            border-left: 4px solid #ffc107;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+
+        .warning {
+            background-color: #f8d7da;
+            padding: 15px;
+            border-left: 4px solid #dc3545;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+
+        a {
+            color: #3498db;
+            text-decoration: none;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        .contact-info {
+            background-color: #e7f3ff;
+            padding: 20px;
+            border-radius: 4px;
+            margin: 20px 0;
+        }
+
+        .final-notice {
+            text-align: center;
+            font-weight: bold;
+            color: #e74c3c;
+            margin: 30px 0;
+            padding: 20px;
+            background-color: #fff5f5;
+            border-radius: 4px;
+            border: 2px solid #e74c3c;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 20px;
+            }
+
+            h1 {
+                font-size: 1.5em;
+            }
+
+            h2 {
+                font-size: 1.3em;
+            }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>用户协议</h1>
+
+    <div class="version-info">
+        <p><strong>版本号</strong>: v1.0</p>
+        <p><strong>生效日期</strong>: 2025年X月X日</p>
+        <p><strong>最后更新</strong>: 2025年X月X日</p>
+    </div>
+
+    <hr>
+
+    <h2>前言</h2>
+    <p>欢迎使用的"工具人小良内网穿透"软件(以下简称"本软件")。</p>
+
+    <div class="warning">
+        <p><strong>在使用本软件前,请您务必仔细阅读并充分理解本协议全部内容,特别是免除或者限制责任的条款、权利许可和信息使用的条款、同意开通或使用特殊单项服务的条款、法律适用和争议解决条款等。</strong></p>
+    </div>
+
+    <div class="warning">
+        <p><strong>禁止利用本软件及其衍生作品从事任何触犯《中华人民共和国刑法》《中华人民共和国网络安全法》及本软件部署地的相关法律法规的行为。</strong></p>
+    </div>
+
+    <p>如您未满18周岁,请在法定监护人陪同下仔细阅读并充分理解本协议,并征得法定监护人的同意后使用本软件。</p>
+
+    <div class="highlight">
+        <p><strong>当您下载、安装、启动、使用本软件时,即视为您已阅读并同意接受本协议的约束。如果您不同意本协议的任何内容,请立即停止下载、安装和使用本软件。</strong></p>
+    </div>
+
+    <hr>
+
+    <h2>第一条 协议范围与接受</h2>
+
+    <h3>1.1 协议构成</h3>
+    <p>本协议由以下部分共同构成:</p>
+    <ol>
+        <li>《工具人小良内网穿透用户协议》(本文档)</li>
+        <li><a href="/static/md/DISCLAIMER.md">《免责声明》</a>(该声明为md格式)</li>
+        <li>软件界面中展示的各项规则、公告、提示</li>
+        <li>开发者不时发布的修订版本</li>
+    </ol>
+    <p>上述内容构成本协议的完整文本,取代之前所有口头或书面的沟通。</p>
+
+    <h3>1.2 协议修改</h3>
+    <p>我们有权根据法律法规变化或运营需要修改本协议。修改后的协议将在:</p>
+    <ul>
+        <li>官方网站 <a href="https://gongjuliang.com">gongjuliang.com</a></li>
+        <li>GitHub/GitCode 项目页面</li>
+    </ul>
+
+    <hr>
+
+    <h2>第二条 服务内容与定义</h2>
+
+    <h3>2.1 软件介绍</h3>
+    <p>本软件是一套基于 Go 语言的 C/S 架构 TCP 内网穿透工具,包括:</p>
+    <ul>
+        <li><strong>工具人小良-内网穿透服务端(nattserver)</strong>:部署在公网服务器,负责端口监听、客户端授权、隧道管理</li>
+        <li><strong>工具人小良-内网穿透客户端(nattuser)</strong>:部署在内网设备,负责连接服务端并转发流量</li>
+    </ul>
+
+    <h3>2.2 核心功能</h3>
+    <ol>
+        <li>TCP 端口穿透服务</li>
+        <li>Web 控制台管理</li>
+        <li>MCP(Model Context Protocol)接口支持</li>
+        <li>隧道状态监控和流量统计</li>
+        <li>审计日志记录</li>
+    </ol>
+
+    <h3>2.3 技术限制</h3>
+    <p>当前版本仅支持:</p>
+    <ul>
+        <li>TCP 协议(不支持 UDP、HTTP 域名转发)</li>
+        <li>点对点隧道(不支持 P2P 打洞)</li>
+        <li>明文传输(不包含 TLS 加密)</li>
+    </ul>
+
+    <hr>
+
+    <h2>第三条 账号注册与管理</h2>
+
+    <h3>3.1 管理员账号</h3>
+    <p>首次使用服务端时,您需要创建管理员账号:</p>
+    <ul>
+        <li>账号密码应符合复杂度要求(至少8位,包含大小写字母和数字)</li>
+        <li>密码通过 SM2 加密存储,我们不会获取您的明文密码</li>
+        <li>请妥善保管账号信息,因账号泄露导致的损失由您自行承担</li>
+    </ul>
+
+    <h3>3.2 账号安全义务</h3>
+    <p>您应当:</p>
+    <ul>
+        <li>定期更换密码</li>
+        <li>不得将账号、秘钥出借、转让泄露出去</li>
+        <li>发现异常登录立即修改密码并检查日志</li>
+        <li>启用 Web 控制台 HTTPS</li>
+    </ul>
+
+    <h3>3.3 账号注销</h3>
+    <p>如需注销管理员账号,请:</p>
+    <ol>
+        <li>备份所有重要数据</li>
+        <li>删除数据库中的用户记录</li>
+        <li>清理相关配置文件</li>
+    </ol>
+
+    <hr>
+
+    <h2>第四条 用户权利</h2>
+
+    <h3>4.1 使用权</h3>
+    <p>在遵守本协议的前提下,您有权:</p>
+    <ul>
+        <li>免费使用本软件</li>
+        <li>查看、修改源代码(遵循相应开源协议)</li>
+    </ul>
+
+    <h3>4.2 数据所有权</h3>
+    <ul>
+        <li>您通过本软件传输的所有数据归您所有</li>
+        <li>我们不收集、存储您的业务数据</li>
+        <li>审计日志仅保存在本地,不会上传至任何服务器</li>
+    </ul>
+
+    <h3>4.3 知情权</h3>
+    <p>您有权了解:</p>
+    <ul>
+        <li>软件如何处理您的数据</li>
+        <li>存在哪些安全风险</li>
+        <li>如何配置安全防护</li>
+    </ul>
+
+    <hr>
+
+    <h2>第五条 用户义务</h2>
+
+    <h3>5.1 合法使用义务</h3>
+    <p>您承诺<strong>仅将本软件用于合法目的</strong>，包括但不限于：</p>
+    <ul>
+        <li>远程调试内网中的自有设备或合法授权的系统；</li>
+        <li>临时访问办公、家庭内部网络中的合规服务；</li>
+        <li>其他不违反中华人民共和国及本软件部署地的法律法规的个人学习或研究场景。</li>
+    </ul>
+
+    <div class="warning">
+        <p><strong>禁止</strong>利用本软件从事任何触犯《中华人民共和国刑法》《中华人民共和国网络安全法》及本软件部署地的相关法律法规的行为，包括但不限于:</p>
+        <ol>
+            <li><strong>规避国家网络监管</strong>：不得通过内网穿透方式突破"国家防火墙"访问被依法屏蔽的境外网站、服务或资源（即"翻墙"），不得用于提供虚拟私人网络（VPN）或其他跨境联网工具的非法中转；</li>
+            <li><strong>实施网络攻击</strong>：不得用于扫描、渗透、攻击他人网络或系统（包括DDoS攻击、端口爆破、漏洞利用等）；</li>
+            <li><strong>传播非法内容</strong>：不得用于传播淫秽、暴力、恐怖、赌博、诈骗、侵犯商业秘密或个人隐私等违法信息；</li>
+            <li><strong>非法经营</strong>：不得利用本软件向第三方提供有偿或无偿的内网穿透服务，从而规避增值电信业务经营许可；</li>
+            <li><strong>破坏网络安全</strong>：不得用于组建"僵尸网络"、隐匿真实身份实施违法活动、非法获取计算机信息系统数据等。</li>
+        </ol>
+    </div>
+
+    <h3>5.2 安全配置义务</h3>
+    <p>您应当:</p>
+    <ul>
+        <li>为暴露到公网的服务配置强密码</li>
+        <li>定期更新系统和软件补丁</li>
+        <li>监控异常流量和访问日志</li>
+        <li>不在公网暴露敏感端口(如数据库端口)</li>
+    </ul>
+
+    <h3>5.3 合规经营义务</h3>
+    <p><strong>如您利用本软件提供服务给第三方,您必须:</strong></p>
+    <ul>
+        <li>取得增值电信业务经营许可</li>
+        <li>履行网络安全等级保护义务</li>
+        <li>建立用户实名认证体系</li>
+        <li>配合主管部门监督检查</li>
+        <li>符合本软件相关开源协议要求</li>
+    </ul>
+
+    <hr>
+
+    <h2>第六条 隐私保护</h2>
+
+    <h3>6.1 数据收集</h3>
+    <p>本软件仅在本地收集以下数据:</p>
+    <ul>
+        <li>配置信息(config.json)</li>
+        <li>数据库文件(SQLite)</li>
+        <li>运行日志(logs/)</li>
+        <li>审计日志(logs/audit/)</li>
+    </ul>
+
+    <div class="highlight">
+        <p><strong>所有数据均存储在您的设备上,我们不会远程收集任何数据。</strong></p>
+    </div>
+
+    <h3>6.2 数据使用</h3>
+    <p>收集的数据仅用于:</p>
+    <ul>
+        <li>软件正常运行</li>
+        <li>故障排查</li>
+        <li>安全审计</li>
+    </ul>
+
+    <h3>6.3 数据删除</h3>
+    <p>您可以随时删除任何本地数据文件。卸载软件前请备份重要数据。</p>
+
+    <hr>
+
+    <h2>第七条 知识产权</h2>
+
+    <h3>7.1 开源协议</h3>
+    <ul>
+        <li>默认采用 AGPL-3.0 协议</li>
+        <li>符合条件的个人用户自动获取 MIT 协议授权</li>
+        <li>详见 DISCLAIMER.md 第五条</li>
+    </ul>
+
+    <h3>7.2 商标权</h3>
+    <p>"工具人小良"及相关标识的商标权归开发者所有。</p>
+
+    <h3>7.3 软件著作权</h3>
+    <p>本软件的著作权归陈锦良所有。</p>
+
+    <hr>
+
+    <h2>第八条 免责声明</h2>
+    <p><em>(此处完整引用 DISCLAIMER.md 的第二、三、四条)</em></p>
+
+    <hr>
+
+    <h2>第九条 责任限制</h2>
+
+    <h3>9.1 责任上限</h3>
+    <p>我们对因使用本软件产生的任何间接、附带、特殊、后果性损害不承担责任,包括但不限于:</p>
+    <ul>
+        <li>数据丢失或泄露</li>
+        <li>业务中断</li>
+        <li>利润损失</li>
+        <li>商誉损害</li>
+    </ul>
+
+    <hr>
+
+    <h2>第十条 服务变更与终止</h2>
+
+    <h3>10.1 服务变更</h3>
+    <p>我们保留随时修改、暂停或终止以下内容的权利:</p>
+    <ul>
+        <li>软件功能</li>
+        <li>支持的协议版本</li>
+        <li>默认配置参数</li>
+    </ul>
+
+    <h3>10.2 违规处理</h3>
+    <p>如发现您违反本协议,我们有权:</p>
+    <ul>
+        <li>警告并要求整改</li>
+        <li>暂停软件更新支持</li>
+        <li>配合执法部门调查</li>
+        <li>向监管部门举报</li>
+    </ul>
+
+    <h3>10.3 数据保留</h3>
+    <p>服务终止后,您应在 30 日内备份并删除所有相关数据。</p>
+
+    <hr>
+
+    <h2>第十一条 未成年人保护</h2>
+
+    <h3>11.1 使用限制</h3>
+    <p><strong>本软件主要面向成年人,不建议未成年人单独使用。</strong></p>
+
+    <h3>11.2 监护人责任</h3>
+    <p>如未成年人确需使用,法定监护人应当:</p>
+    <ul>
+        <li>陪同阅读并解释本协议</li>
+        <li>监督使用过程</li>
+        <li>承担全部法律责任</li>
+    </ul>
+
+    <hr>
+
+    <h2>第十二条 法律适用与争议解决</h2>
+
+    <h3>12.1 法律适用</h3>
+    <p>本协议的订立、执行、解释及争议解决均适用<strong>中华人民共和国法律</strong>(不含港澳台地区法律)。</p>
+
+    <h3>12.2 协商解决</h3>
+    <p>因本协议引起的任何争议,双方应首先通过友好协商解决。</p>
+
+    <h3>12.3 管辖法院</h3>
+    <p>协商不成的,任何一方均可向<strong>开发者所在地有管辖权的人民法院</strong>提起诉讼。</p>
+
+    <hr>
+
+    <h2>第十三条 其他条款</h2>
+
+    <h3>13.1 可分割性</h3>
+    <p>如本协议任何条款被认定为无效或不可执行,不影响其他条款的效力。</p>
+
+    <h3>13.2 权利放弃</h3>
+    <p>我们未行使或延迟行使本协议项下的任何权利,不构成对该权利的放弃。</p>
+
+    <h3>13.3 完整协议</h3>
+    <p>本协议构成您与我们之间关于使用本软件的完整协议,取代先前所有口头或书面约定。</p>
+
+    <h3>13.4 标题便利</h3>
+    <p>本协议各条款标题仅为方便阅读,不影响条款含义。</p>
+
+    <hr>
+
+    <h2>第十四条 联系方式</h2>
+
+    <p>如您对本协议有任何疑问,请通过以下方式联系我们:</p>
+
+    <div class="contact-info">
+        <ul>
+            <li><strong>邮箱</strong>: <a href="mailto:2893426753@qq.com">2893426753@qq.com</a></li>
+            <li><strong>官方账号</strong>: B站/抖音/快手/小红书搜索"工具人小良"</li>
+        </ul>
+        <p><strong>我们将在收到反馈后 60 个工作日内回复。</strong></p>
+    </div>
+
+    <hr>
+
+    <div class="final-notice">
+        <p><strong>如您不同意本协议的任何内容,请勿安装、复制、使用或传播本软件。</strong></p>
+    </div>
+
+    <hr>
+</div>
+</body>
+</html>

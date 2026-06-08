@@ -11,7 +11,8 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
-	"html"
+	"html/template"
+	"io/fs"
 	"math/big"
 	"net"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	embedfiles "nattserver/Web/EmbedFiles"
 	"nattserver/internal/auth"
 	"nattserver/internal/config"
 	"nattserver/internal/db"
@@ -53,13 +55,24 @@ type initRequest struct {
 
 func NewInitHandler(defaultCfg *config.Config, done chan<- *config.Config) http.Handler {
 	mux := http.NewServeMux()
+	tmpl := template.Must(template.New("").ParseFS(embedfiles.WebFs, "Templates/init.html", "Templates/agreement.html"))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" && r.URL.Path != "/init.html" {
 			http.NotFound(w, r)
 			return
 		}
-		writeHTML(w, serverInitHTML(defaultCfg))
+		writeTemplate(w, tmpl, "init.html", newInitPageData(defaultCfg))
 	})
+	mux.HandleFunc("/agreement.html", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		writeTemplate(w, tmpl, "agreement.html", nil)
+	})
+	if mdFS, err := fs.Sub(embedfiles.WebFs, "Static/md"); err == nil {
+		mux.Handle("/static/md/", http.StripPrefix("/static/md/", http.FileServer(http.FS(mdFS))))
+	}
 	mux.HandleFunc("/api/init/status", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -90,6 +103,41 @@ func NewInitHandler(defaultCfg *config.Config, done chan<- *config.Config) http.
 		}
 	})
 	return mux
+}
+
+type initPageData struct {
+	BrandName    string
+	Environment  string
+	HTTPHost     string
+	HTTPPort     int
+	ControlHost  string
+	ControlPort  int
+	DataHost     string
+	DataPort     int
+	DatabasePath string
+	HTTPSEnabled bool
+	CertFile     string
+	KeyFile      string
+}
+
+func newInitPageData(cfg *config.Config) initPageData {
+	if cfg == nil {
+		cfg = config.Default()
+	}
+	return initPageData{
+		BrandName:    serverBrandName,
+		Environment:  cfg.App.Environment,
+		HTTPHost:     cfg.HTTP.Host,
+		HTTPPort:     cfg.HTTP.Port,
+		ControlHost:  cfg.Protocol.ControlHost,
+		ControlPort:  cfg.Protocol.ControlPort,
+		DataHost:     cfg.Protocol.DataHost,
+		DataPort:     cfg.Protocol.DataPort,
+		DatabasePath: cfg.Database.Path,
+		HTTPSEnabled: cfg.HTTP.HTTPSEnabled,
+		CertFile:     cfg.HTTP.CertFile,
+		KeyFile:      cfg.HTTP.KeyFile,
+	}
 }
 
 func RunInitialization(ctx context.Context, defaultCfg *config.Config) (*config.Config, error) {
@@ -427,218 +475,15 @@ func writeHTML(w http.ResponseWriter, body string) {
 	_, _ = w.Write([]byte(body))
 }
 
+func writeTemplate(w http.ResponseWriter, tmpl *template.Template, name string, data any) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := tmpl.ExecuteTemplate(w, name, data); err != nil {
+		http.Error(w, "render template failed", http.StatusInternalServerError)
+	}
+}
+
 func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(data)
-}
-
-func selectedAttr(current string, value string) string {
-	if strings.TrimSpace(current) == value {
-		return "selected"
-	}
-	return ""
-}
-
-func checkedAttr(value bool) string {
-	if value {
-		return "checked"
-	}
-	return ""
-}
-
-func serverInitHTML(cfg *config.Config) string {
-	return fmt.Sprintf(`<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>初始化 %s</title>
-  <style>
-    body{font-family:Arial,"Microsoft YaHei",sans-serif;margin:0;background:#f4f7fb;color:#1f2937;padding:28px}
-    .box{max-width:900px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:24px;box-shadow:0 16px 40px rgba(15,23,42,.08)}
-    h1{margin:0 0 6px;font-size:24px;line-height:1.25}
-    h2{font-size:18px;margin:22px 0 8px}
-    p{margin:0 0 16px;color:#64748b;line-height:1.7}
-    label{display:block;margin-top:14px;font-weight:500}
-    input,select,textarea{width:100%%;box-sizing:border-box;margin-top:6px;padding:9px;border:1px solid #d1d5db;border-radius:6px;background:#fff}
-    textarea{min-height:120px;font-family:Consolas,monospace}
-    .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
-    .field-row{display:grid;gap:12px;margin-top:8px}
-    .field-row.two-cols{grid-template-columns:repeat(2,minmax(0,1fr))}
-    .field-row.single{grid-template-columns:1fr}
-    .field-row label{margin-top:8px}
-    .steps{display:flex;gap:10px;margin:22px 0 8px}
-    .step-pill{flex:1;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;background:#f8fafc;color:#64748b;text-align:center}
-    .step-pill.active{border-color:#0f766e;background:#ecfdf5;color:#0f766e;font-weight:700}
-    .step-panel{display:none}
-    .step-panel.active{display:block}
-    .check-row{display:flex;align-items:center;gap:8px;margin-top:16px;font-weight:500}
-    .check-row input{width:auto;margin:0}
-    .https-options{display:none;margin-top:12px;padding:14px;border:1px solid #e5e7eb;border-radius:8px;background:#f8fafc}
-    .radio-row{display:flex;align-items:center;gap:18px;margin-top:10px}
-    .radio-row label{display:flex;align-items:center;gap:6px;margin:0}
-    .radio-row input{width:auto}
-    .actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
-    button{padding:10px 18px;border:0;border-radius:6px;background:#0f766e;color:#fff;cursor:pointer}
-    .secondary{background:#e5e7eb;color:#1f2937}
-    pre{white-space:pre-wrap;color:#0f766e;margin-top:16px}
-    @media(max-width:720px){body{padding:16px}.grid,.field-row.two-cols{grid-template-columns:1fr}}
-  </style>
-</head>
-<body>
-<div class="box">
-  <h1>初始化 %s</h1>
-  <p>首次启动需要创建配置文件、数据库、密钥文件和控制台管理员。</p>
-  <div class="steps">
-    <div class="step-pill active" data-step-label="1">1. 运行与路径配置</div>
-    <div class="step-pill" data-step-label="2">2. 管理员与协议确认</div>
-  </div>
-  <section class="step-panel active" data-step="1">
-    <h2>运行与路径配置</h2>
-    <div class="field-row single" data-layout="environment">
-      <label>运行模式<select id="environment">
-        <option value="development" %s>测试模式</option>
-        <option value="production" %s>生产模式</option>
-      </select></label>
-    </div>
-    <div class="field-row two-cols" data-layout="web-listen">
-      <label>Web 监听地址<input id="http_host" value="%s"></label>
-      <label>Web 端口<input id="http_port" type="number" value="%d"></label>
-    </div>
-    <div class="field-row two-cols" data-layout="control-listen">
-      <label>控制监听地址<input id="control_host" value="%s"></label>
-      <label>控制端口<input id="control_port" type="number" value="%d"></label>
-    </div>
-    <div class="field-row two-cols" data-layout="data-listen">
-      <label>数据端口<input id="data_port" type="number" value="%d"></label>
-      <label>数据监听地址<input id="data_host" value="%s"></label>
-    </div>
-    <div class="field-row single" data-layout="database">
-      <label>数据库路径<input id="database_path" value="%s"></label>
-    </div>
-    <div class="field-row single" data-layout="web-https">
-      <label class="check-row"><input id="web_https_enabled" type="checkbox" %s><span>Web 控制台启用 HTTPS</span></label>
-    </div>
-    <div id="https_options" class="https-options">
-      <div class="radio-row">
-        <label><input name="web_https_mode" type="radio" value="auto" checked>自动生成测试证书</label>
-        <label><input name="web_https_mode" type="radio" value="manual">填写证书</label>
-      </div>
-      <p id="auto_cert_notice">自动生成的测试证书会保存到 %s 和 %s，仅适合测试环境。</p>
-      <div id="manual_cert_fields" style="display:none">
-        <label>HTTPS 证书 PEM<textarea id="web_https_cert_pem" placeholder="-----BEGIN CERTIFICATE-----"></textarea></label>
-        <label>HTTPS 私钥 PEM<textarea id="web_https_key_pem" placeholder="-----BEGIN PRIVATE KEY----- 或 -----BEGIN RSA PRIVATE KEY-----"></textarea></label>
-      </div>
-    </div>
-    <div class="actions"><button type="button" onclick="goNext()">下一步</button></div>
-  </section>
-  <section class="step-panel" data-step="2">
-    <h2>管理员与协议确认</h2>
-    <label>控制台账号<input id="admin_username" autocomplete="username"></label>
-    <label>控制台密码<input id="admin_password" type="password" autocomplete="new-password" placeholder="至少 8 位，必须包含字母和数字"></label>
-    <label class="check-row"><input id="agree_terms" type="checkbox"><span>已阅读并同意《用户协议》</span></label>
-    <div class="actions">
-      <button type="button" class="secondary" onclick="showStep(1)">上一步</button>
-      <button type="button" onclick="submitInit()">保存并启动</button>
-    </div>
-  </section>
-  <pre id="result"></pre>
-</div>
-<script>
-function setResult(text){document.getElementById('result').textContent=text||'';}
-function showStep(step){
-  document.querySelectorAll('.step-panel').forEach(function(panel){
-    panel.classList.toggle('active', panel.getAttribute('data-step')===String(step));
-  });
-  document.querySelectorAll('.step-pill').forEach(function(item){
-    item.classList.toggle('active', item.getAttribute('data-step-label')===String(step));
-  });
-  setResult('');
-}
-function selectedHTTPSMode(){
-  var item=document.querySelector('input[name="web_https_mode"]:checked');
-  return item?item.value:'auto';
-}
-function updateHTTPSOptions(){
-  var enabled=document.getElementById('web_https_enabled').checked;
-  var manual=selectedHTTPSMode()==='manual';
-  document.getElementById('https_options').style.display=enabled?'block':'none';
-  document.getElementById('manual_cert_fields').style.display=(enabled&&manual)?'block':'none';
-  document.getElementById('auto_cert_notice').style.display=(enabled&&!manual)?'block':'none';
-}
-document.getElementById('web_https_enabled').addEventListener('change',updateHTTPSOptions);
-document.querySelectorAll('input[name="web_https_mode"]').forEach(function(item){item.addEventListener('change',updateHTTPSOptions);});
-function validPort(id){
-  var value=Number(document.getElementById(id).value);
-  return Number.isInteger(value)&&value>=1&&value<=65535;
-}
-function goNext(){
-  if(!validPort('http_port')||!validPort('control_port')||!validPort('data_port')){
-    setResult('请填写有效的端口，范围 1 到 65535');
-    return;
-  }
-  if(!document.getElementById('database_path').value.trim()){
-    setResult('请填写数据库路径');
-    return;
-  }
-  showStep(2);
-}
-function submitInit(){
-  if(!document.getElementById('admin_username').value.trim()){
-    setResult('请填写控制台账号');
-    return;
-  }
-  if(!document.getElementById('admin_password').value.trim()){
-    setResult('请填写控制台密码');
-    return;
-  }
-  if(!document.getElementById('agree_terms').checked){
-    setResult('请先阅读并同意用户协议');
-    return;
-  }
-  fetch('/api/init/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-    admin_username:document.getElementById('admin_username').value,
-    admin_password:document.getElementById('admin_password').value,
-    environment:document.getElementById('environment').value,
-    agree_terms:document.getElementById('agree_terms').checked,
-    http_host:document.getElementById('http_host').value,
-    http_port:Number(document.getElementById('http_port').value),
-    control_host:document.getElementById('control_host').value,
-    control_port:Number(document.getElementById('control_port').value),
-    data_host:document.getElementById('data_host').value,
-    data_port:Number(document.getElementById('data_port').value),
-    database_path:document.getElementById('database_path').value,
-    web_https_enabled:document.getElementById('web_https_enabled').checked,
-    web_https_mode:selectedHTTPSMode(),
-    web_https_cert_pem:document.getElementById('web_https_cert_pem').value,
-    web_https_key_pem:document.getElementById('web_https_key_pem').value
-  })}).then(function(r){return r.json();}).then(function(d){
-    setResult(d.message||'初始化完成，正在启动控制台');
-    if(d.code===0){
-      var port=d.data&&d.data.http&&d.data.http.port;
-      var https=d.data&&d.data.http&&d.data.http.https_enabled;
-      var scheme=https?'https':'http';
-      var target=port ? (scheme+'://'+window.location.hostname+':'+port+'/login.html') : '/login.html';
-      setTimeout(function(){ window.location.href=target; }, 1800);
-    }
-  }).catch(function(){setResult('初始化请求失败，请检查服务是否仍在运行');});
-}
-updateHTTPSOptions();
-</script>
-</body>
-</html>`, serverBrandName, serverBrandName,
-		selectedAttr(cfg.App.Environment, "development"),
-		selectedAttr(cfg.App.Environment, "production"),
-		html.EscapeString(cfg.HTTP.Host),
-		cfg.HTTP.Port,
-		html.EscapeString(cfg.Protocol.ControlHost),
-		cfg.Protocol.ControlPort,
-		cfg.Protocol.DataPort,
-		html.EscapeString(cfg.Protocol.DataHost),
-		html.EscapeString(cfg.Database.Path),
-		checkedAttr(cfg.HTTP.HTTPSEnabled),
-		html.EscapeString(cfg.HTTP.CertFile),
-		html.EscapeString(cfg.HTTP.KeyFile),
-	)
 }

@@ -40,6 +40,7 @@ func TestRouterServesEmbeddedFrontend(t *testing.T) {
 			t.Fatalf("%s does not look like a module page: %s", path, body)
 		}
 	}
+	_ = getFrontend(t, router, "/agreement.html")
 
 	tunnels := getFrontend(t, router, "/tunnels.html")
 	assertContainsAll(t, tunnels, "server_port", "data_port", "remote_port", "client_secret", "maskSecret", "show-secret", "renderDetailText", "show-detail", "last_error", "loadDefaults", "defaultConfig", `id="sh" class="layui-input" placeholder="请填写服务端地址"`, `id="sp" class="layui-input" type="number" value="`, `id="dp" class="layui-input" type="number" value="`)

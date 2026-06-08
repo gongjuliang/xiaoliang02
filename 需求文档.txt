@@ -1,322 +1,357 @@
-﻿# Go 语言内外网穿透软件项目需求文档
+﻿# 工具人小良内网穿透项目需求文档
 
 ## 一、项目目标与首版范围
 
-1. 项目目标：开发一套 C/S 架构的内外网穿透工具，通过公网服务器上的服务端与内网机器上的客户端配合，实现公网 TCP 端口到内网 TCP 服务的映射访问。
-2. 首版范围：
-   - 支持 TCP 端口穿透。
-   - 支持多客户端、多隧道并发运行。
-   - 支持服务端 Web 管理控制台。
-   - 支持客户端 Web 管理控制台。
-   - 支持 SQLite 持久化用户、客户端、隧道、连接、配置和流量统计。
-   - 审计日志写入 `logs/audit/YYYY-MM-DD.jsonl`，不再依赖 SQLite 审计表。
-   - 支持标准 MCP Streamable HTTP JSON-RPC 接口，供 Codex 等工具自动发现和调用。
-3. 首版不包含：
-   - UDP 穿透。
-   - HTTP 域名转发。
-   - HTTPS 证书托管。
-   - WebSocket 专用转发。
-   - P2P 打洞。
-   - TLS 控制连接或数据连接。
-4. 技术栈：
-   - Go 1.25。
-   - Gin。
-   - SQLite。
-   - HTML + CSS + jQuery + Layui。
-   - MCP。
+本项目是一套 C/S 架构的 TCP 内网穿透工具，通过公网服务器上的 `nattserver` 与内网机器上的 `nattuser` 配合，把公网 TCP 端口映射到内网 TCP 服务。
 
-## 二、项目目录
+当前前端品牌名：
+
+- 服务端：`工具人小良-内网穿透服务端`
+- 客户端：`工具人小良-内网穿透客户端`
+
+首版支持能力：
+
+- TCP 端口穿透。
+- 多客户端、多隧道并发。
+- 服务端 Web 管理后台。
+- 客户端 Web 管理后台。
+- SQLite 持久化用户、客户端授权、隧道、连接、配置和流量统计。
+- 审计日志写入 `logs/audit/YYYY-MM-DD.jsonl`。
+- 标准 MCP Streamable HTTP JSON-RPC，供 Codex 等 AI 工具自动发现和调用。
+
+首版不包含：
+
+- UDP 穿透。
+- HTTP 域名转发。
+- HTTPS 证书托管。
+- WebSocket 专用转发。
+- P2P 打洞。
+- 隧道协议 TLS 控制连接或 TLS 数据连接。
+
+技术栈：
+
+- Go 1.25。
+- Gin。
+- SQLite。
+- HTML + CSS + jQuery + Layui。
+- MCP Streamable HTTP。
+
+## 二、项目目录与运行时目录
+
+源码目录：
 
 ```text
 D:\2025Code\ai\natt
   nattserver\    服务端项目
   nattuser\      客户端项目
   commonGin\     公共参考项目
+  skills\        项目 AI Skill
 ```
 
-服务端目录：
+服务端默认运行时母目录为 `xiaoliang02_server/`：
 
 ```text
-nattserver/
+nattserver\
   main.go
-  xiaoliang02_server/
-    config/
-    data/
-    logs/
-    ssl/
-  Web/EmbedFiles/
-  internal/
-    api/
-    auth/
-    config/
-    control/
-    db/
-    httpserver/
-    logger/
-    mcp/
-    model/
-    protocol/
-    startup/
+  Web\EmbedFiles\
+  internal\
+  xiaoliang02_server\
+    config\config.json
+    data\nattserver.db
+    data\sm2_private.pem
+    data\sm2_public.pem
+    logs\YYYY-MM-DD.log
+    logs\audit\YYYY-MM-DD.jsonl
+    ssl\web.crt
+    ssl\web.key
 ```
 
-客户端目录：
+客户端默认运行时母目录为 `xiaoliang02_user/`：
 
 ```text
-nattuser/
+nattuser\
   main.go
-  xiaoliang02_user/
-    config/
-    data/
-    logs/
-    ssl/
-  Web/EmbedFiles/
-  internal/
-    api/
-    auth/
-    config/
-    control/
-    db/
-    httpserver/
-    logger/
-    mcp/
-    model/
-    protocol/
-    startup/
+  Web\EmbedFiles\
+  internal\
+  xiaoliang02_user\
+    config\config.json
+    data\nattuser.db
+    data\sm2_private.pem
+    data\sm2_public.pem
+    logs\YYYY-MM-DD.log
+    logs\audit\YYYY-MM-DD.jsonl
+    ssl\web.crt
+    ssl\web.key
 ```
 
-## 三、默认端口与启动初始化
+默认启动只读取上述母目录下的 `config/config.json`。显式传入 `-config <path>` 时按传入路径读取，仍支持 `.json`、`.yaml`、`.yml`。
 
-服务端默认端口：
+## 三、默认端口
 
-| 配置 | 默认值 | 说明 |
-| --- | --- | --- |
-| `http.port` | `25510` | Web 管理后台和 MCP HTTP 端口 |
-| `protocol.control_port` | `25511` | 客户端控制连接端口 |
-| `protocol.data_port` | `25512` | 客户端数据连接端口 |
-| `tunnel.remote_port_min` | `0` | 公网映射端口范围下限 |
-| `tunnel.remote_port_max` | `65535` | 公网映射端口范围上限 |
+服务端：
 
-客户端默认端口：
+| 用途 | 默认值 |
+| --- | --- |
+| Web 管理后台 | `0.0.0.0:25510` |
+| MCP 接口 | `0.0.0.0:25510/mcp` |
+| 客户端控制连接 | `0.0.0.0:25511` |
+| 客户端数据连接 | `0.0.0.0:25512` |
+| 公网映射端口范围 | `0-65535` |
 
-| 配置 | 默认值 | 说明 |
-| --- | --- | --- |
-| `http.port` | `25520` | 本地 Web 管理后台和 MCP HTTP 端口 |
-| `server_defaults.control_port` | `25511` | 默认服务端控制端口 |
-| `server_defaults.data_port` | `25512` | 默认服务端数据端口 |
+客户端：
 
-启动要求：
+| 用途 | 默认值 |
+| --- | --- |
+| Web 管理后台 | `127.0.0.1:25520` |
+| MCP 接口 | `127.0.0.1:25520/mcp` |
+| 默认服务端控制端口 | `25511` |
+| 默认服务端数据端口 | `25512` |
 
-1. 默认启动时以 exe 所在目录作为工作目录。
-2. 启动前检查本机需要监听的端口是否被占用。
-3. 服务端检查 HTTP、控制端口、数据端口。
-4. 客户端只检查本机 HTTP 端口，不检查远端 `server_defaults` 端口。
-5. 端口占用错误使用中文提示，例如 `25510端口被占用`。
-6. 默认启动时如果缺少 `xiaoliang02_server/config/config.json` 或 `xiaoliang02_user/config/config.json`，进入初始化页面。
-7. 默认启动时如果数据库不存在、`users` 表不存在或用户为空，进入初始化页面。
-8. 显式传入 `-config` 时不进入交互初始化；如果没有管理员账号，应返回中文启动错误。
+启动前必须检查本机需要监听的端口是否被占用。服务端检查 Web、控制、数据端口；客户端只检查本机 Web 端口。端口被占用时返回中文错误，例如 `25510端口被占用`。
 
-初始化页面要求：
+## 四、首次初始化
 
-1. 初始化页采用两步向导。
-2. 第一步配置运行模式、各个端口、数据库路径和 Web 控制台 HTTPS。
-3. 第二步配置管理员账号、管理员密码和用户协议确认。
-4. HTTPS 关闭时隐藏证书选项。
-5. HTTPS 开启并选择自动生成测试证书时隐藏 PEM 输入框。
-6. HTTPS 开启并选择填写证书时显示证书和私钥 PEM 输入框。
-7. 提供管理员账号输入框，账号 trim 后不能为空。
-8. 提供管理员密码输入框，密码至少 8 位，且必须同时包含字母和数字。
-9. 提供运行模式选择：
-   - 测试模式写入 `app.environment=development`。
-   - 生产模式写入 `app.environment=production`。
-10. 提供“已阅读并同意《用户协议》”勾选项；未勾选不得提交。
-11. 初始化成功后创建配置文件、目录、SM2 密钥、SQLite 数据库和管理员账号。
-12. 不再内置默认账号 `admin` 或默认密码 `admin123456`。
+默认启动时，如果缺少默认 `config.json`，或数据库不存在、`users` 表不存在、`users` 表为空，程序进入初始化页面。
 
-## 四、配置规格
+初始化地址：
 
-1. 默认配置文件为 `xiaoliang02_server/config/config.json` 或 `xiaoliang02_user/config/config.json`。
-2. 显式传入 `.yaml` 或 `.yml` 时仍兼容 YAML 读取。
-3. 默认启动不再自动回退 YAML；缺少 JSON 时进入初始化页面。
-4. 配置结构体同时保留 `json` 和 `yaml` tag。
-5. 配置页面只允许修改可热更新配置。
-6. 不可热更新配置只读展示，后端也必须拒绝直接调用接口修改。
-7. `protocol.tls` 和 `server_defaults.use_tls` 已删除，不再展示、不再校验、不再参与运行逻辑。
+- 服务端：`http://127.0.0.1:25510/init.html`
+- 客户端：`http://127.0.0.1:25520/init.html`
 
-## 五、登录与安全
+初始化页是两步向导：
 
-1. Web 管理后台登录使用用户名、密码、验证码。
-2. 登录密码在前端使用 SM2 加密后提交。
-3. `/api/*/v1/auth/sm2-public-key` 返回：
-   - `algorithm`
-   - `cipher_format`
-   - `public_key_pem`
-   - `public_key_hex`
-4. 前端内置离线 `sm2.js`，不依赖 CDN。
-5. 生产模式只接受 SM2 密文密码。
-6. 测试模式可保留明文密码兼容能力。
-7. 验证码使用图片接口展示，页面 DOM 不出现算式明文。
-8. 验证码一次性使用并设置短 TTL。
-9. 同一 IP 登录失败每累计 10 次触发递进封禁：
-   - 5 分钟
-   - 10 分钟
-   - 30 分钟
-   - 1 小时
-   - 6 小时
-10. 成功登录清空当前失败次数，但递进档位在程序重启前保留。
-11. 登录态使用 JWT。
-12. 管理接口必须验证 Bearer JWT。
-13. MCP Key、客户端秘钥、隧道秘钥使用 `xiaoliang_` 前缀。
-14. `password_hash` 和 `secret_hash` 使用当前项目定义的 SM3 哈希格式。
-15. 敏感错误不泄露账号或密码细节；显性配置、端口、秘钥、占用等业务错误尽量使用中文字段级提示。
+1. 运行与路径配置。
+   - 运行模式，默认生产模式。
+   - Web 监听地址和端口。
+   - 服务端还包含控制监听地址、控制端口、数据监听地址、数据端口、公网端口范围。
+   - 客户端只填写默认控制端口、默认数据端口，不填写默认服务端地址。
+   - 数据库路径。
+   - Web 控制台是否启用 HTTPS。
+2. 管理员与协议确认。
+   - 控制台账号，不能为空。
+   - 控制台密码，至少 8 位，必须同时包含字母和数字。
+   - 必须勾选“已阅读并同意《用户协议》”。
 
-## 六、隧道模型与通信协议
+初始化时取消内置默认账号和默认密码，必须由用户输入管理员账号密码。
 
-首版采用控制连接和数据连接分离模型。
+Web 控制台 HTTPS 仅作用于 Web 管理后台，不恢复隧道协议 TLS。启用 HTTPS 时支持两种方式：
 
-控制连接负责：
+- 自动生成测试证书，写入 `ssl/web.crt` 和 `ssl/web.key`。
+- 手动填写证书 PEM 和私钥 PEM，程序写入 `ssl/web.crt` 和 `ssl/web.key`。
 
-1. 客户端认证。
-2. 心跳。
-3. 隧道状态同步。
-4. 服务端启停隧道指令。
-5. 服务端主动下发 `data_close`、`tunnel_stop` 等消息。
+初始化提交成功后创建母目录下的 `config/`、`data/`、`logs/`、`ssl/`、SM2 密钥文件、SQLite 数据库和管理员账号。`auth.jwt_secret` 必须生成随机字符串，不使用固定默认值。
 
-数据连接负责：
+## 五、配置规格
 
-1. 对公网访问连接建立对应的数据转发链路。
-2. 每个公网连接对应一组数据连接。
-3. 数据连接通过连接 ID 和隧道 ID 与控制连接关联。
+服务端配置主要字段：
+
+```json
+{
+  "app": {
+    "name": "nattserver",
+    "version": "0.1.0",
+    "environment": "production"
+  },
+  "http": {
+    "host": "0.0.0.0",
+    "port": 25510,
+    "https_enabled": false,
+    "cert_file": "xiaoliang02_server/ssl/web.crt",
+    "key_file": "xiaoliang02_server/ssl/web.key"
+  },
+  "database": {
+    "path": "xiaoliang02_server/data/nattserver.db"
+  },
+  "log": {
+    "dir": "xiaoliang02_server/logs",
+    "level": "info"
+  },
+  "auth": {
+    "jwt_secret": "初始化时随机生成",
+    "access_token_ttl_minutes": 120,
+    "refresh_token_ttl_minutes": 10080,
+    "sm2_private_key_file": "xiaoliang02_server/data/sm2_private.pem",
+    "sm2_public_key_file": "xiaoliang02_server/data/sm2_public.pem",
+    "login_rate_limit_per_minute": 10
+  },
+  "protocol": {
+    "control_host": "0.0.0.0",
+    "control_port": 25511,
+    "data_host": "0.0.0.0",
+    "data_port": 25512
+  },
+  "tunnel": {
+    "remote_port_min": 0,
+    "remote_port_max": 65535
+  }
+}
+```
+
+客户端配置主要字段：
+
+```json
+{
+  "app": {
+    "name": "nattuser",
+    "version": "0.1.0",
+    "environment": "production"
+  },
+  "http": {
+    "host": "127.0.0.1",
+    "port": 25520,
+    "https_enabled": false,
+    "cert_file": "xiaoliang02_user/ssl/web.crt",
+    "key_file": "xiaoliang02_user/ssl/web.key"
+  },
+  "database": {
+    "path": "xiaoliang02_user/data/nattuser.db"
+  },
+  "log": {
+    "dir": "xiaoliang02_user/logs",
+    "level": "info"
+  },
+  "auth": {
+    "jwt_secret": "初始化时随机生成",
+    "access_token_ttl_minutes": 120,
+    "refresh_token_ttl_minutes": 10080,
+    "sm2_private_key_file": "xiaoliang02_user/data/sm2_private.pem",
+    "sm2_public_key_file": "xiaoliang02_user/data/sm2_public.pem",
+    "login_rate_limit_per_minute": 10
+  },
+  "server_defaults": {
+    "control_port": 25511,
+    "data_port": 25512
+  }
+}
+```
+
+配置页只允许修改可热更新配置；不可热更新配置只读展示。MCP Key 由系统生成，不允许前端自定义。
+
+## 六、认证与安全
+
+Web 登录：
+
+- 登录页必须勾选“已阅读并同意《用户协议》”。
+- 登录前获取 SM2 公钥，前端使用 `public_key_hex` 加密密码后提交。
+- 生产模式只接受 SM2 密文密码；测试模式可按配置允许明文开发便利能力。
+- 登录验证码由后端生成图片，接口返回 `captcha_id` 和 `image_url`，页面 DOM 不暴露算式文本。
+- 登录成功后返回 JWT access token 和 refresh token。
+- 登录失败按 IP 累计，失败 10 次触发封禁；封禁时长递进为 5 分钟、10 分钟、30 分钟、1 小时、6 小时，进程重启后重置。
+
+密码和秘钥哈希：
+
+- `password_hash` 和 `secret_hash` 使用新 SM3 格式。
+- 格式为 `8位随机大小写字母数字 + "$" + SM3(base64(salt + 输入字符串))`。
+- 新生成秘钥统一使用 `xiaoliang_` 前缀。
+
+敏感信息展示：
+
+- 客户端秘钥、隧道秘钥、MCP Key 默认前端遮挡。
+- 后台可通过“查看”按钮弹窗查看完整值。
+- 查看 MCP Key 写入审计日志。
+
+## 七、隧道模型与协议
+
+通信模型采用控制连接和数据连接分离：
+
+- 控制连接负责客户端认证、心跳、隧道状态同步、启停指令、错误通知。
+- 数据连接负责公网访问流量转发。
+- 每个公网访问连接建立对应的数据转发链路。
+
+服务端隧道由 `nattserver` 管理：
+
+- 隧道名称。
+- 公网监听地址和公网监听端口。
+- 状态：`stopped`、`starting`、`running`、`stopping`、`error`。
+- `auto_start`，表示 nattuser 连接后自动启动。
+- 状态详情 `last_error`。
+- 上行字节 `bytes_in` 和下行字节 `bytes_out`。
+- 隧道秘钥。
+
+客户端隧道连接由 `nattuser` 配置：
+
+- 服务端地址。
+- 服务端控制端口。
+- 服务端数据端口。
+- 服务端隧道秘钥。
+- 本地目标地址。
+- 本地目标端口。
+- 服务端公网监听端口，连接成功后由服务端回传并展示。
+- 状态和状态详情。
 
 隧道归属规则：
 
-1. 服务端隧道只管理公网监听端口、客户端归属、状态、秘钥和流量。
-2. 服务端创建或编辑隧道时不再接收 `local_host`、`local_port`。
-3. 客户端负责配置本地目标地址和本地目标端口。
-4. 客户端本地配置按 `server_connection_id + server_tunnel_id` 唯一绑定。
-5. 服务端发起 `data_open` 时只携带隧道 ID、连接 ID、数据端口等服务端侧信息。
-6. 客户端收到 `data_open` 后查询本地配置，再连接本地服务。
-7. 客户端缺少本地绑定、绑定禁用或本地服务连接失败时，应向服务端返回可见错误，并写入中文状态详情。
+- `nattserver` 不再配置本地地址和本地端口。
+- `nattuser` 必须为对应服务端隧道配置本地目标。
+- 服务端隧道 ID 同一时间只能被一个在线客户端连接占用。
+- 如果隧道被其他客户端占用，新客户端连接返回中文状态详情“该连接正在占用，不得连接”。
+- 如果服务端隧道为 `stopped`，客户端首次连接或运行中收到停止指令后状态改为 `error`，状态详情为“服务端暂停了隧道连接，请通知服务端人员启动隧道。”。
+- 删除或停止隧道后释放公网监听端口。
+- 客户端断线后自动重连。
 
-隧道状态要求：
+## 八、Web 管理后台
 
-1. 服务端隧道支持 `running`、`stopped`、`error` 等状态。
-2. 客户端连接支持 `connected`、`stopped`、`connecting`、`error` 等状态。
-3. 服务端隧道为 `stopped` 时，应通知对应客户端连接更新状态详情：
-   `服务端暂停了隧道连接，请通知服务端人员启动隧道。`
-4. 客户端首次连接到已暂停的服务端隧道时，也应写入上述中文状态详情。
-5. 同一服务端隧道 ID 被一个客户端连接占用时，其他客户端连接不得连接，应返回：
-   `该连接正在占用，不得连接`
-6. 占用连接断开、停止隧道或进程退出后释放占用。
-7. 停止或删除隧道时释放公网监听端口。
-8. `remote_port=0` 只允许作为配置范围下限显示，创建隧道时公网监听端口必须在 `1-65535`。
+两端前端文件位于 `Web/EmbedFiles/`，采用多页面 HTML：
 
-## 七、Web 管理后台
+- `login.html`
+- `index.html`
+- `dashboard.html`
+- `tunnels.html`
+- `config.html`
+- `audit.html`
+- `mcp.html`
 
-两端前端均采用多页面结构，页面位于 `Web/EmbedFiles/Templates`，静态资源位于 `Web/EmbedFiles/Static`。
+刷新页面后使用 `sessionStorage` 保持当前菜单，不强制回到第一个菜单。退出登录时清理菜单状态。
 
-服务端页面：
+服务端后台功能：
 
-1. `login.html`：登录。
-2. `index.html`：后台框架。
-3. `dashboard.html`：仪表盘。
-4. `clients.html`：客户端授权管理。
-5. `tunnels.html`：隧道管理。
-6. `config.html`：配置管理。
-7. `mcp.html`：MCP 配置和使用说明。
-8. `audit.html`：审计日志。
+- 客户端授权管理。
+- 隧道管理。
+- 配置查看与热更新。
+- MCP 配置、Key 查看和轮换。
+- 审计日志查询。
+- 流量监控和仪表盘。
 
-客户端页面：
+客户端后台功能：
 
-1. `login.html`：登录。
-2. `index.html`：后台框架。
-3. `dashboard.html`：仪表盘。
-4. `tunnels.html`：隧道连接和本地目标配置。
-5. `config.html`：配置管理。
-6. `mcp.html`：MCP 配置和使用说明。
-7. `audit.html`：审计日志。
+- 隧道连接管理。
+- 本地目标配置。
+- 配置查看与热更新。
+- MCP 配置、Key 查看和轮换。
+- 审计日志查询。
+- 本机连接状态展示。
 
-前端体验要求：
+状态详情显示规则：
 
-1. 刷新页面后使用 `sessionStorage` 恢复当前菜单。
-2. 退出登录时清理菜单状态。
-3. 隧道表格显示状态和状态详情。
-4. 长状态详情截断显示，点击详情按钮弹窗查看全文。
-5. 秘钥默认遮挡，点击查看按钮弹窗显示完整秘钥。
-6. checkbox 与标题文字垂直对齐。
-7. 配置输入框 placeholder 使用 `当前值:xxx`，不使用 `新值`。
-8. MCP 页面展示标准 `/mcp` JSON-RPC 使用说明和示例提示词。
+- 空值显示 `-`。
+- 长文本表格内显示前 20 个字符和省略号。
+- 点击详情图标弹窗查看完整内容。
 
-## 八、REST API 规格
-
-统一返回格式：
+REST API 返回格式：
 
 ```json
 {
   "code": 0,
-  "message": "ok",
+  "message": "success",
   "data": {},
   "request_id": "..."
 }
 ```
 
-分页返回格式：
+分页格式：
 
 ```json
 {
   "items": [],
-  "total": 0,
   "page": 1,
-  "page_size": 20
+  "page_size": 20,
+  "total": 0
 }
 ```
 
-服务端主要 API：
+## 九、MCP 规格
 
-1. 登录、刷新、当前用户、验证码、公钥。
-2. 客户端授权 CRUD、启用、禁用、轮换秘钥。
-3. 隧道 CRUD、启动、停止、删除、轮换隧道秘钥。
-4. 配置查询和可热更新配置修改。
-5. MCP 配置启停、查看 Key、轮换 Key。
-6. 审计日志分页查询。
-7. 仪表盘和健康检查。
-
-客户端主要 API：
-
-1. 登录、刷新、当前用户、验证码、公钥。
-2. 服务端连接和本地隧道配置 CRUD。
-3. 连接、断开服务端。
-4. 配置查询和可热更新配置修改。
-5. MCP 配置启停、查看 Key、轮换 Key。
-6. 审计日志分页查询。
-7. 状态和健康检查。
-
-## 九、SQLite 数据设计
-
-需要支持以下核心表：
-
-1. `users`：后台用户。
-2. `clients`：服务端客户端授权。
-3. `tunnels`：服务端公网隧道。
-4. `tunnel_keys`：隧道秘钥。
-5. `server_connections`：客户端连接服务端配置。
-6. `local_tunnels` 或等价表：客户端本地目标绑定。
-7. `settings`：运行配置。
-8. `traffic_stats`：流量统计。
-9. 历史 `audit_logs` 表可保留兼容，但新审计写入 JSONL 文件。
-
-迁移要求：
-
-1. 数据库不存在时自动创建。
-2. 表结构缺失时自动迁移。
-3. 首次启动迁移旧 SQLite 审计数据到 JSONL，并写入迁移标记避免重复导出。
-4. 旧 TLS 字段可保留兼容 schema，但新业务入口不再使用。
-5. 旧缺少明文秘钥的数据可显示摘要，提示轮换后才能查看完整秘钥。
-
-## 十、MCP 规格
-
-MCP 不再单独监听端口，和 Web/API 共用同一个 Gin HTTP 服务。
-
-标准端点：
+MCP 与 Web 管理后台共用 HTTP 端口，端点为：
 
 ```text
 POST /mcp
@@ -324,83 +359,101 @@ POST /mcp
 
 鉴权方式：
 
-```text
-Authorization: Bearer <MCP_KEY>
-X-MCP-Token: <MCP_KEY>
-```
+- `Authorization: Bearer <MCP_KEY>`
+- 或 `X-MCP-Token: <MCP_KEY>`
 
-必须支持 JSON-RPC 方法：
+MCP Key 由系统生成，启用 MCP 时如果没有 Key 会自动生成。后台提供查看和重置 Key 功能。
 
-1. `initialize`
-2. `notifications/initialized`
-3. `ping`
-4. `tools/list`
-5. `tools/call`
+支持 JSON-RPC 方法：
+
+- `initialize`
+- `notifications/initialized`
+- `ping`
+- `tools/list`
+- `tools/call`
 
 服务端 MCP 工具：
 
-1. `server.list_clients`
-2. `server.get_client`
-3. `server.list_tunnels`
-4. `server.create_tunnel`
-5. `server.start_tunnel`
-6. `server.stop_tunnel`
-7. `server.delete_tunnel`
-8. `server.get_dashboard`
+- `server.list_clients`
+- `server.get_client`
+- `server.list_tunnels`
+- `server.create_tunnel`
+- `server.start_tunnel`
+- `server.stop_tunnel`
+- `server.delete_tunnel`
+- `server.get_dashboard`
 
 客户端 MCP 工具：
 
-1. `client.list_tunnel_connections`
-2. `client.list_servers`
-3. `client.connect_tunnel`
-4. `client.connect_server`
-5. `client.disconnect_tunnel`
-6. `client.disconnect_server`
-7. `client.list_tunnels`
-8. `client.get_network_status`
+- `client.list_tunnel_connections`
+- `client.list_servers`
+- `client.connect_tunnel`
+- `client.connect_server`
+- `client.disconnect_tunnel`
+- `client.disconnect_server`
+- `client.list_tunnels`
+- `client.get_network_status`
 
-MCP 返回要求：
+MCP 工具发现和工具调用必须写入审计日志，敏感参数需要脱敏。
 
-1. 成功工具调用返回 `content`、`structuredContent`、`isError:false`。
-2. 工具业务失败返回 `isError:true`。
-3. JSON-RPC 协议错误返回 `error.code` 和 `error.message`。
-4. `tools/list` 返回工具名称、说明和 `inputSchema`。
-5. MCP 工具发现和工具调用写入审计日志。
-6. 审计内容中 token、secret、password、key 等敏感参数必须脱敏。
-
-## 十一、日志与审计
+## 十、日志与审计
 
 普通日志：
 
-1. 服务端写入 `xiaoliang02_server/logs/YYYY-MM-DD.log`，客户端写入 `xiaoliang02_user/logs/YYYY-MM-DD.log`。
-2. 控制台和文件日志包含级别、文件名和行号。
-3. 示例：`[INFO] routes.go:61 server routes registered`。
+- 写入 `xiaoliang02_*/logs/YYYY-MM-DD.log`。
+- 输出 `info`、`error` 等级。
+- 日志中包含触发 Go 文件和行号。
 
 审计日志：
 
-1. 服务端写入 `xiaoliang02_server/logs/audit/YYYY-MM-DD.jsonl`，客户端写入 `xiaoliang02_user/logs/audit/YYYY-MM-DD.jsonl`。
-2. 每行一个 JSON 对象。
-3. 后台审计页面从 JSONL 文件读取并分页展示。
-4. 审计需要覆盖登录、配置修改、秘钥查看、秘钥轮换、隧道启停、MCP 操作等事件。
+- 写入 `xiaoliang02_*/logs/audit/YYYY-MM-DD.jsonl`。
+- 后台审计页从 JSONL 文件分页读取。
+- 记录登录、MCP Key 查看、MCP 工具调用、隧道创建、启停、删除等操作。
+
+## 十一、部署与运行
+
+源码运行：
+
+```powershell
+cd D:\2025Code\ai\natt\nattserver
+go run .
+
+cd D:\2025Code\ai\natt\nattuser
+go run .
+```
+
+显式配置运行：
+
+```powershell
+go run . -config xiaoliang02_server\config\config.json
+go run . -config xiaoliang02_user\config\config.json
+```
+
+编译：
+
+```powershell
+go build ./...
+```
+
+把编译后的 exe 放到空文件夹时，默认启动会以 exe 所在目录作为工作目录，并在该目录下创建对应母目录。
 
 ## 十二、验收场景
 
-1. 空文件夹内启动 exe，缺少 `xiaoliang02_server/config/config.json` 或 `xiaoliang02_user/config/config.json` 时进入初始化页面。
-2. 初始化页面创建配置、目录、SM2 密钥、SQLite 数据库和自定义管理员账号。
-3. 生产模式登录时，前端 SM2 加密密码后可以成功登录。
-4. 明文密码在生产模式下不能登录。
-5. 客户端成功注册并连接服务端。
-6. 服务端创建 TCP 隧道后，客户端绑定本地目标，公网端口可访问内网服务。
-7. 多客户端、多隧道可以并发运行。
-8. 客户端断线后自动重连，服务端后台展示离线状态。
-9. 删除或停止隧道后公网端口释放。
-10. 禁用客户端秘钥后客户端无法继续连接。
-11. 服务端隧道为 stopped 时，客户端状态详情显示：
-    `服务端暂停了隧道连接，请通知服务端人员启动隧道。`
-12. 同一隧道被占用时，其他客户端连接收到中文占用提示。
-13. JWT 过期、验证码、登录限流、接口鉴权生效。
-14. MCP `POST /mcp` 支持 `initialize`、`tools/list`、`tools/call`，Codex 可自动发现工具。
-15. MCP 旧路径 `/mcp/tools/call` 不再作为工具调用入口。
-16. 审计日志写入 JSONL 文件，Web 页面可分页查询。
-17. 两端 `go test ./... -count=1` 通过。
-18. 两端 `go build ./...` 通过。
+必须覆盖以下验收：
+
+- 空文件夹首次启动进入初始化页。
+- 初始化页两步向导能生成配置、目录、SM2 密钥、HTTPS 证书、数据库和管理员账号。
+- 生产模式登录使用 SM2 密文、验证码图片、用户协议勾选和 JWT。
+- 同 IP 登录失败 10 次后触发递进封禁。
+- 服务端创建客户端授权，秘钥以 `xiaoliang_` 开头。
+- 服务端创建 TCP 隧道，客户端配置服务端地址、端口、秘钥和本地目标后连接成功。
+- 公网端口可访问内网 TCP 服务。
+- 多客户端、多隧道并发运行。
+- 同一个服务端隧道同一时间只能被一个客户端占用。
+- 服务端停止隧道后客户端状态同步为指定中文错误详情。
+- 删除或停止隧道后公网端口释放。
+- 服务端和客户端重启后配置、隧道、连接和审计日志仍存在。
+- 配置页只允许修改可热更新项。
+- MCP `POST /mcp` 可被 Codex 自动发现工具并调用。
+- 审计日志包含 MCP 操作记录。
+- 两端执行 `go test ./... -count=1 -p 1` 和 `go build -p 1 ./...` 通过。

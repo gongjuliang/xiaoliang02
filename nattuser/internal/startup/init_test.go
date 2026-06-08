@@ -54,7 +54,7 @@ func TestInitHandlerCreatesConfigFilesAndDatabase(t *testing.T) {
 		t.Fatalf("init page status=%d body=%s", page.Code, page.Body.String())
 	}
 	assertContainsAll(t, page.Body.String(),
-		"初始化 工具人小良-内网穿透客户端",
+		"工具人小良-内网穿透客户端",
 		`data-step="1"`,
 		`data-step="2"`,
 		"下一步",
@@ -63,9 +63,28 @@ func TestInitHandlerCreatesConfigFilesAndDatabase(t *testing.T) {
 		"管理员与协议确认",
 		"web_https_enabled",
 		"manual_cert_fields",
-		"已阅读并同意《用户协议》",
+		`href="/agreement.html"`,
+		"已阅读并同意",
 	)
 	assertNotContainsAny(t, page.Body.String(), "默认服务端地址", `id="server_host"`)
+
+	agreement := httptest.NewRecorder()
+	handler.ServeHTTP(agreement, httptest.NewRequest(http.MethodGet, "/agreement.html", nil))
+	if agreement.Code != http.StatusOK {
+		t.Fatalf("agreement status=%d body=%s", agreement.Code, agreement.Body.String())
+	}
+
+	md := httptest.NewRecorder()
+	handler.ServeHTTP(md, httptest.NewRequest(http.MethodGet, "/static/md/DISCLAIMER.md", nil))
+	if md.Code != http.StatusOK {
+		t.Fatalf("static md status=%d body=%s", md.Code, md.Body.String())
+	}
+
+	js := httptest.NewRecorder()
+	handler.ServeHTTP(js, httptest.NewRequest(http.MethodGet, "/static/js/app.js", nil))
+	if js.Code != http.StatusNotFound {
+		t.Fatalf("static js status=%d want 404", js.Code)
+	}
 
 	status := httptest.NewRecorder()
 	handler.ServeHTTP(status, httptest.NewRequest(http.MethodGet, "/api/init/status", nil))
@@ -250,7 +269,7 @@ func TestInitHandlerRejectsInvalidAdminSetup(t *testing.T) {
 }
 
 func TestInitHTMLHasTwoStepWizardAndHidesManualCertificateFieldsForAutoMode(t *testing.T) {
-	body := clientInitHTML(config.Default())
+	body := getClientInitPage(t, config.Default())
 
 	assertContainsAll(t, body,
 		`<section class="step-panel active" data-step="1">`,
@@ -321,6 +340,17 @@ func TestRunInitializationReturnsSubmittedConfig(t *testing.T) {
 
 func clientInitTestConfig() *config.Config {
 	return config.Default()
+}
+
+func getClientInitPage(t *testing.T, cfg *config.Config) string {
+	t.Helper()
+	handler := NewInitHandler(cfg, make(chan *config.Config, 1))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/init.html", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("init page status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	return rec.Body.String()
 }
 
 func validClientInitBody(t *testing.T, cfg *config.Config, overrides map[string]any) string {

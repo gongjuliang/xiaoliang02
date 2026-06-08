@@ -40,6 +40,7 @@ func TestRouterServesEmbeddedFrontend(t *testing.T) {
 			t.Fatalf("%s does not look like a module page: %s", path, body)
 		}
 	}
+	_ = getFrontend(t, router, "/agreement.html")
 
 	tunnels := getFrontend(t, router, "/tunnels.html")
 	assertContainsAll(t, tunnels, "t.secret", "secret_hint", "maskSecret", "show-secret", "renderDetailText", "show-detail", "formatBytes", "bytes_in", "bytes_out", "last_error", `id="as" type="checkbox" checked`, "nattuser 连接后自动启动")
