@@ -91,11 +91,11 @@ textarea {
 }
 
 .brand-mark {
-    width: 42px;
-    height: 42px;
+    width: 51px;
+    height: 51px;
     display: grid;
     place-items: center;
-    border-radius: 8px;
+    border-radius: 0px;
     color: #fff;
     background: var(--primary);
     font-weight: 800;

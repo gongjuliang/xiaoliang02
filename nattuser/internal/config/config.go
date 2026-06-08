@@ -141,7 +141,7 @@ func Default() *Config {
 			Environment: "production",
 		},
 		HTTP: HTTPConfig{
-			Host:                   "127.0.0.1",
+			Host:                   "0.0.0.0",
 			Port:                   25520,
 			HTTPSEnabled:           false,
 			CertFile:               filepath.Join(RuntimeRoot, "ssl", "web.crt"),
