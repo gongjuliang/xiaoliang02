@@ -92,7 +92,7 @@ if (NATT.requireAuth()) {
             '<label>服务端秘钥<input id="cs" class="layui-input" placeholder="nattserver 创建隧道后显示的 key"></label>' +
             '<label>本地地址<input id="lh" class="layui-input" value="127.0.0.1"></label>' +
             '<label>本地端口<input id="lp" class="layui-input" type="number"></label>' +
-            '<label class="check-row"><input id="as" type="checkbox"><span>自启动</span></label></div>';
+            '<label class="check-row"><input id="as" type="checkbox" checked><span>自启动</span></label></div>';
     }
     $("#content").on("click", "#newConn", function () {
         loadDefaults().then(function (defaults) {
