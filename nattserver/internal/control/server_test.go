@@ -253,6 +253,72 @@ func TestServerRestartsAutoStartTunnelsWhenClientReconnects(t *testing.T) {
 	}
 }
 
+func TestServerAllowsWaitingAutoStartTunnelOnFirstConnection(t *testing.T) {
+	ctx := context.Background()
+	database, err := db.Open(ctx, filepath.Join(t.TempDir(), "test.db"), nil)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer database.Close()
+
+	secretHash, err := auth.HashPassword("natt_client_secret")
+	if err != nil {
+		t.Fatalf("hash client secret: %v", err)
+	}
+	client, err := db.CreateClient(ctx, database, db.CreateClientParams{
+		Name:       "client-a",
+		SecretHash: secretHash,
+		SecretHint: auth.SecretHint("natt_client_secret"),
+	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	tunnel, err := db.CreateTunnel(ctx, database, db.CreateTunnelParams{
+		Name:       "waiting-auto",
+		ClientID:   client.ID,
+		Protocol:   model.TunnelProtocolTCP,
+		RemoteHost: "127.0.0.1",
+		RemotePort: freeTCPPort(t),
+		AutoStart:  true,
+	})
+	if err != nil {
+		t.Fatalf("create tunnel: %v", err)
+	}
+	if tunnel.Status != model.TunnelStatusWaiting {
+		t.Fatalf("created tunnel status=%s want waiting", tunnel.Status)
+	}
+
+	controlPort := freeTCPPort(t)
+	dataPort := freeTCPPort(t)
+	server := NewServer(config.ProtocolConfig{
+		ControlHost: "127.0.0.1",
+		ControlPort: controlPort,
+		DataHost:    "127.0.0.1",
+		DataPort:    dataPort,
+	}, database, nil)
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- server.Run(runCtx)
+	}()
+
+	conn := authenticateFakeClient(t, controlPort, "natt_client_secret")
+	defer conn.Close()
+	expectTunnelStartCommand(t, conn, tunnel.ID)
+	waitForTunnelStatus(t, database, tunnel.ID, model.TunnelStatusRunning)
+
+	cancel()
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("server run returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for server shutdown")
+	}
+}
+
 func TestServerRejectsInvalidClientSecretWithProtocolError(t *testing.T) {
 	ctx := context.Background()
 	database, err := db.Open(ctx, filepath.Join(t.TempDir(), "test.db"), nil)
@@ -485,6 +551,113 @@ func TestServerRejectsControlConnectionWhenTunnelIsStopped(t *testing.T) {
 	}
 	if errorMsg.Type != protocol.TypeError || protocolErr.Code != protocol.CodeConflict || protocolErr.Message != tunnelStoppedByServerMessage {
 		t.Fatalf("unexpected stopped error message=%+v payload=%+v", errorMsg, protocolErr)
+	}
+
+	cancel()
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("server run returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for server shutdown")
+	}
+}
+
+func TestServerDisconnectTunnelClosesControlAndDeletedSecretCannotReconnect(t *testing.T) {
+	ctx := context.Background()
+	database, err := db.Open(ctx, filepath.Join(t.TempDir(), "test.db"), nil)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer database.Close()
+
+	secretHash, err := auth.HashPassword("natt_client_secret")
+	if err != nil {
+		t.Fatalf("hash client secret: %v", err)
+	}
+	client, err := db.CreateClient(ctx, database, db.CreateClientParams{
+		Name:       "client-a",
+		SecretHash: secretHash,
+		SecretHint: auth.SecretHint("natt_client_secret"),
+	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	tunnel, err := db.CreateTunnel(ctx, database, db.CreateTunnelParams{
+		Name:       "delete-disconnect",
+		ClientID:   client.ID,
+		Protocol:   model.TunnelProtocolTCP,
+		RemoteHost: "127.0.0.1",
+		RemotePort: freeTCPPort(t),
+		AutoStart:  true,
+	})
+	if err != nil {
+		t.Fatalf("create tunnel: %v", err)
+	}
+
+	controlPort := freeTCPPort(t)
+	dataPort := freeTCPPort(t)
+	server := NewServer(config.ProtocolConfig{
+		ControlHost: "127.0.0.1",
+		ControlPort: controlPort,
+		DataHost:    "127.0.0.1",
+		DataPort:    dataPort,
+	}, database, nil)
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- server.Run(runCtx)
+	}()
+
+	conn := authenticateFakeClient(t, controlPort, "natt_client_secret")
+	expectTunnelStartCommand(t, conn, tunnel.ID)
+	waitForTunnelStatus(t, database, tunnel.ID, model.TunnelStatusRunning)
+
+	if _, err := db.SetTunnelKeyStatus(ctx, database, tunnel.ID, model.TunnelKeyStatusDisabled); err != nil {
+		t.Fatalf("disable tunnel key: %v", err)
+	}
+	if _, err := server.StopTunnel(ctx, tunnel.ID); err != nil {
+		t.Fatalf("stop tunnel before delete: %v", err)
+	}
+	stopCommand, err := protocol.ReadMessage(conn)
+	if err != nil {
+		t.Fatalf("read tunnel_stop command: %v", err)
+	}
+	if stopCommand.Type != protocol.TypeTunnelStop || stopCommand.TunnelID != tunnel.ID {
+		t.Fatalf("unexpected tunnel_stop command: %+v", stopCommand)
+	}
+	server.DisconnectTunnel(tunnel.ID)
+	assertConnClosed(t, conn, "control connection")
+	if _, err := db.DeleteTunnel(ctx, database, tunnel.ID); err != nil {
+		t.Fatalf("delete tunnel: %v", err)
+	}
+
+	reconnect := dialWithRetry(t, fmt.Sprintf("127.0.0.1:%d", controlPort))
+	defer reconnect.Close()
+	authReq, err := protocol.NewMessage(protocol.TypeAuthRequest, 0, 0, "", protocol.AuthRequest{
+		ClientSecret:    "natt_client_secret",
+		ClientName:      "client-a",
+		ClientVersion:   "test-version",
+		ProtocolVersion: protocol.Version,
+	})
+	if err != nil {
+		t.Fatalf("build reconnect auth request: %v", err)
+	}
+	if err := protocol.WriteMessage(reconnect, authReq); err != nil {
+		t.Fatalf("write reconnect auth request: %v", err)
+	}
+	errorMsg, err := protocol.ReadMessage(reconnect)
+	if err != nil {
+		t.Fatalf("read reconnect auth error: %v", err)
+	}
+	protocolErr, err := protocol.DecodePayload[protocol.ProtocolError](errorMsg)
+	if err != nil {
+		t.Fatalf("decode reconnect auth error: %v", err)
+	}
+	if errorMsg.Type != protocol.TypeError || protocolErr.Code != protocol.CodeUnauthorized {
+		t.Fatalf("unexpected reconnect auth error=%+v payload=%+v", errorMsg, protocolErr)
 	}
 
 	cancel()

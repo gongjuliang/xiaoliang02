@@ -22,12 +22,16 @@ func Open(ctx context.Context, path string, log *logger.Logger) (*sql.DB, error)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database: %w", err)
 	}
-	database.SetMaxOpenConns(1)
+	database.SetMaxOpenConns(5)
 	database.SetConnMaxIdleTime(5 * time.Minute)
 
 	if _, err := database.ExecContext(ctx, "PRAGMA foreign_keys = ON;"); err != nil {
 		database.Close()
 		return nil, fmt.Errorf("enable sqlite foreign keys: %w", err)
+	}
+	if _, err := database.ExecContext(ctx, "PRAGMA journal_mode = WAL;"); err != nil {
+		database.Close()
+		return nil, fmt.Errorf("set sqlite wal mode: %w", err)
 	}
 	if _, err := database.ExecContext(ctx, "PRAGMA busy_timeout = 5000;"); err != nil {
 		database.Close()

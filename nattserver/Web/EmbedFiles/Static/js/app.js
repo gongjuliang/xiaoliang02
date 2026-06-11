@@ -20,9 +20,10 @@
         var lower = String(value || "").toLowerCase();
         var cls = "";
         if (["online", "enabled", "running", "ok", "true"].indexOf(lower) >= 0) cls = " ok";
-        if (["offline", "stopped", "connecting", "false"].indexOf(lower) >= 0) cls = " warn";
+        if (["offline", "stopped", "waiting", "connecting", "false"].indexOf(lower) >= 0) cls = " warn";
         if (["disabled", "error"].indexOf(lower) >= 0) cls = " err";
-        return '<span class="badge' + cls + '">' + escapeHtml(value || "-") + "</span>";
+        var labels = { waiting: "\u5f85\u8fde\u63a5" };
+        return '<span class="badge' + cls + '">' + escapeHtml(labels[lower] || value || "-") + "</span>";
     }
 
     function request(method, path, data) {

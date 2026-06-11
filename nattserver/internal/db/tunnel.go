@@ -129,14 +129,19 @@ func CreateTunnel(ctx context.Context, database *sql.DB, params CreateTunnelPara
 	}
 	defer tx.Rollback()
 
+	status := model.TunnelStatusStopped
+	if params.AutoStart {
+		status = model.TunnelStatusWaiting
+	}
 	result, err := tx.ExecContext(ctx, `
 INSERT INTO tunnels(name, client_id, protocol, remote_host, remote_port, status, auto_start, remark)
-VALUES(?, ?, ?, ?, ?, 'stopped', ?, ?);`,
+VALUES(?, ?, ?, ?, ?, ?, ?, ?);`,
 		params.Name,
 		params.ClientID,
 		params.Protocol,
 		params.RemoteHost,
 		params.RemotePort,
+		status,
 		boolToInt(params.AutoStart),
 		params.Remark,
 	)
@@ -168,7 +173,12 @@ VALUES(?, ?, ?, 'enabled', 'offline');`, id, legacyClient.SecretHash, legacyClie
 func UpdateTunnel(ctx context.Context, database *sql.DB, id int64, params UpdateTunnelParams) (model.Tunnel, error) {
 	result, err := database.ExecContext(ctx, `
 UPDATE tunnels
-SET name = ?, protocol = ?, remote_host = ?, remote_port = ?, auto_start = ?, remark = ?, last_error = NULL
+SET name = ?, protocol = ?, remote_host = ?, remote_port = ?, auto_start = ?, remark = ?, last_error = NULL,
+    status = CASE
+        WHEN status = 'stopped' AND ? = 1 THEN 'waiting'
+        WHEN status = 'waiting' AND ? = 0 THEN 'stopped'
+        ELSE status
+    END
 WHERE id = ?;`,
 		params.Name,
 		params.Protocol,
@@ -176,6 +186,8 @@ WHERE id = ?;`,
 		params.RemotePort,
 		boolToInt(params.AutoStart),
 		params.Remark,
+		boolToInt(params.AutoStart),
+		boolToInt(params.AutoStart),
 		id,
 	)
 	if err != nil {
@@ -222,6 +234,33 @@ WHERE id = ?;`, status, lastError, id)
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
 		return model.Tunnel{}, fmt.Errorf("get tunnel status rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return model.Tunnel{}, ErrNotFound
+	}
+	return GetTunnelByID(ctx, database, id)
+}
+
+func SetTunnelStopped(ctx context.Context, database *sql.DB, id int64, lastError string) (model.Tunnel, error) {
+	var result sql.Result
+	var err error
+	if lastError == "" {
+		result, err = database.ExecContext(ctx, `
+UPDATE tunnels
+SET status = 'stopped', auto_start = 0, last_error = NULL
+WHERE id = ?;`, id)
+	} else {
+		result, err = database.ExecContext(ctx, `
+UPDATE tunnels
+SET status = 'stopped', auto_start = 0, last_error = ?
+WHERE id = ?;`, lastError, id)
+	}
+	if err != nil {
+		return model.Tunnel{}, mapSQLiteError("set tunnel stopped", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return model.Tunnel{}, fmt.Errorf("get tunnel stopped rows affected: %w", err)
 	}
 	if rowsAffected == 0 {
 		return model.Tunnel{}, ErrNotFound

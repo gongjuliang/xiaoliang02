@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -209,7 +210,7 @@ func TestServerMCPSupportsClientAndTunnelQueries(t *testing.T) {
 }
 
 func TestServerMCPCreatesStartsStopsAndDeletesTunnelWithAuditLogs(t *testing.T) {
-	router, database := setupServerMCPRouterWithRuntime(t)
+	router, database, runtime := setupServerMCPRouterWithRuntime(t)
 	defer database.Close()
 
 	rec := callServerMCP(t, router, "server-mcp-token", "server.create_tunnel", map[string]any{
@@ -234,6 +235,9 @@ func TestServerMCPCreatesStartsStopsAndDeletesTunnelWithAuditLogs(t *testing.T) 
 	if created.ID == 0 || created.Name != "mcp-created" || !created.AutoStart {
 		t.Fatalf("unexpected created tunnel payload: %+v", createdPayload)
 	}
+	if created.Status != model.TunnelStatusWaiting {
+		t.Fatalf("created status=%s want=%s", created.Status, model.TunnelStatusWaiting)
+	}
 	if createdPayload.Secret == "" || createdPayload.Key.SecretHint == "" {
 		t.Fatalf("created tunnel response missing secret data: %+v", createdPayload)
 	}
@@ -257,6 +261,9 @@ func TestServerMCPCreatesStartsStopsAndDeletesTunnelWithAuditLogs(t *testing.T) 
 	if stopped.Status != model.TunnelStatusStopped {
 		t.Fatalf("status=%s want=%s", stopped.Status, model.TunnelStatusStopped)
 	}
+	if stopped.AutoStart {
+		t.Fatal("stopped tunnel should clear auto_start")
+	}
 
 	rec = callServerMCP(t, router, "server-mcp-token", "server.delete_tunnel", map[string]any{"id": created.ID})
 	if rec.Code != http.StatusOK {
@@ -264,6 +271,12 @@ func TestServerMCPCreatesStartsStopsAndDeletesTunnelWithAuditLogs(t *testing.T) 
 	}
 	if _, err := db.GetTunnelByID(context.Background(), database, created.ID); err != db.ErrNotFound {
 		t.Fatalf("deleted tunnel lookup err=%v want ErrNotFound", err)
+	}
+	if !runtime.disconnected[created.ID] {
+		t.Fatalf("runtime did not disconnect deleted tunnel: %+v", runtime.disconnected)
+	}
+	if _, err := db.AuthenticateTunnelSecret(context.Background(), database, createdPayload.Secret); !errors.Is(err, db.ErrNotFound) {
+		t.Fatalf("deleted tunnel secret should be invalid, err=%v", err)
 	}
 
 	logs, total, err := db.ListAuditLogs(context.Background(), database, 10, 0)
@@ -329,15 +342,16 @@ func setupServerMCPRouter(t *testing.T) (http.Handler, *sql.DB) {
 	return router, database
 }
 
-func setupServerMCPRouterWithRuntime(t *testing.T) (http.Handler, *sql.DB) {
+func setupServerMCPRouterWithRuntime(t *testing.T) (http.Handler, *sql.DB, *fakeTunnelRuntime) {
 	t.Helper()
 
 	router, database := setupServerMCPRouter(t)
 	_ = router
+	runtime := &fakeTunnelRuntime{database: database}
 	return NewServerRouter(config.MCPConfig{
 		Enabled:     true,
 		AccessToken: "server-mcp-token",
-	}, database, nil, fakeTunnelRuntime{database: database}), database
+	}, database, nil, runtime), database, runtime
 }
 
 func callServerMCP(t *testing.T, handler http.Handler, token string, tool string, params any) *httptest.ResponseRecorder {
@@ -427,7 +441,8 @@ func hasTool(tools []struct {
 }
 
 type fakeTunnelRuntime struct {
-	database *sql.DB
+	database     *sql.DB
+	disconnected map[int64]bool
 }
 
 func (f fakeTunnelRuntime) StartTunnel(ctx context.Context, id int64) (model.Tunnel, error) {
@@ -435,7 +450,14 @@ func (f fakeTunnelRuntime) StartTunnel(ctx context.Context, id int64) (model.Tun
 }
 
 func (f fakeTunnelRuntime) StopTunnel(ctx context.Context, id int64) (model.Tunnel, error) {
-	return db.SetTunnelStatus(ctx, f.database, id, model.TunnelStatusStopped, "")
+	return db.SetTunnelStopped(ctx, f.database, id, "")
+}
+
+func (f *fakeTunnelRuntime) DisconnectTunnel(id int64) {
+	if f.disconnected == nil {
+		f.disconnected = make(map[int64]bool)
+	}
+	f.disconnected[id] = true
 }
 
 func hasAuditAction(logs []model.AuditLog, action string) bool {

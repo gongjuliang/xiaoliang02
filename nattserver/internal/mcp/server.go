@@ -33,6 +33,7 @@ const (
 type TunnelRuntime interface {
 	StartTunnel(ctx context.Context, id int64) (model.Tunnel, error)
 	StopTunnel(ctx context.Context, id int64) (model.Tunnel, error)
+	DisconnectTunnel(id int64)
 }
 
 type serverHandler struct {
@@ -326,19 +327,25 @@ func (h *serverHandler) deleteTunnel(ctx context.Context, raw json.RawMessage) (
 	if params.ID <= 0 {
 		return nil, fmt.Errorf("id is required")
 	}
-	if h.runtime != nil {
-		if tunnel, err := db.GetTunnelByID(ctx, h.database, params.ID); err == nil && tunnel.Status == model.TunnelStatusRunning {
-			if _, err := h.runtime.StopTunnel(ctx, params.ID); err != nil {
-				return nil, translateDBError(err, "stop tunnel before delete failed")
-			}
-		}
+	tunnel, err := db.GetTunnelByID(ctx, h.database, params.ID)
+	if err != nil {
+		return nil, translateDBError(err, "load tunnel before delete failed")
 	}
-	tunnel, err := db.DeleteTunnel(ctx, h.database, params.ID)
+	if _, err := db.SetTunnelKeyStatus(ctx, h.database, params.ID, model.TunnelKeyStatusDisabled); err != nil && !errors.Is(err, db.ErrNotFound) {
+		return nil, translateDBError(err, "disable tunnel key before delete failed")
+	}
+	if h.runtime != nil {
+		if _, err := h.runtime.StopTunnel(ctx, params.ID); err != nil {
+			return nil, translateDBError(err, "stop tunnel before delete failed")
+		}
+		h.runtime.DisconnectTunnel(params.ID)
+	}
+	deleted, err := db.DeleteTunnel(ctx, h.database, params.ID)
 	if err != nil {
 		return nil, translateDBError(err, "delete tunnel failed")
 	}
 	h.audit(ctx, "mcp_tunnel_delete", tunnel.ID, fmt.Sprintf("mcp deleted tunnel %s", tunnel.Name))
-	return tunnel, nil
+	return deleted, nil
 }
 
 func (h *serverHandler) runTunnelAction(ctx context.Context, raw json.RawMessage, actionFn func(context.Context, int64) (model.Tunnel, error), action string, contentPrefix string) (any, error) {
@@ -368,7 +375,7 @@ func (h *serverHandler) stopTunnelByID(ctx context.Context, id int64) (model.Tun
 	if h.runtime != nil {
 		return h.runtime.StopTunnel(ctx, id)
 	}
-	return db.SetTunnelStatus(ctx, h.database, id, model.TunnelStatusStopped, "")
+	return db.SetTunnelStopped(ctx, h.database, id, "")
 }
 
 func (h *serverHandler) validateTunnelParams(params *tunnelParams) error {

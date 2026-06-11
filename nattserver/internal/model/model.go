@@ -37,6 +37,7 @@ type TunnelStatus string
 
 const (
 	TunnelStatusStopped  TunnelStatus = "stopped"
+	TunnelStatusWaiting  TunnelStatus = "waiting"
 	TunnelStatusStarting TunnelStatus = "starting"
 	TunnelStatusRunning  TunnelStatus = "running"
 	TunnelStatusStopping TunnelStatus = "stopping"

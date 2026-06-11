@@ -223,7 +223,7 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	}
 
 	tunnel, tunnelErr := db.GetTunnelByID(ctx, s.database, key.TunnelID)
-	if tunnelErr == nil && tunnel.Status == "stopped" {
+	if tunnelErr == nil && tunnel.Status == "stopped" && !tunnel.AutoStart {
 		_ = writeWithDeadline(conn, protocol.NewErrorMessage(first.RequestID, protocol.CodeConflict, tunnelStoppedByServerMessage))
 		return
 	}
@@ -328,10 +328,15 @@ func (s *Server) register(client *clientConn) bool {
 
 func (s *Server) unregister(tunnelID int64, client *clientConn) {
 	s.mu.Lock()
+	removed := false
 	if s.active[tunnelID] == client {
 		delete(s.active, tunnelID)
+		removed = true
 	}
 	s.mu.Unlock()
+	if !removed {
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()

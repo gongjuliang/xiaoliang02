@@ -28,6 +28,7 @@ type TunnelHandler struct {
 type TunnelRuntime interface {
 	StartTunnel(ctx context.Context, id int64) (model.Tunnel, error)
 	StopTunnel(ctx context.Context, id int64) (model.Tunnel, error)
+	DisconnectTunnel(id int64)
 }
 
 type tunnelRequest struct {
@@ -193,21 +194,29 @@ func (h *TunnelHandler) delete(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if h.runtime != nil {
-		if tunnel, err := db.GetTunnelByID(c.Request.Context(), h.database, id); err == nil && tunnel.Status == model.TunnelStatusRunning {
-			if _, err := h.runtime.StopTunnel(c.Request.Context(), id); err != nil {
-				h.writeRuntimeError(c, err, "stop tunnel before delete failed")
-				return
-			}
-		}
+	tunnel, err := db.GetTunnelByID(c.Request.Context(), h.database, id)
+	if err != nil {
+		h.writeDBError(c, err, "load tunnel before delete failed")
+		return
 	}
-	tunnel, err := db.DeleteTunnel(c.Request.Context(), h.database, id)
+	if _, err := db.SetTunnelKeyStatus(c.Request.Context(), h.database, id, model.TunnelKeyStatusDisabled); err != nil && !errors.Is(err, db.ErrNotFound) {
+		h.writeDBError(c, err, "disable tunnel key before delete failed")
+		return
+	}
+	if h.runtime != nil {
+		if _, err := h.runtime.StopTunnel(c.Request.Context(), id); err != nil {
+			h.writeRuntimeError(c, err, "stop tunnel before delete failed")
+			return
+		}
+		h.runtime.DisconnectTunnel(id)
+	}
+	deleted, err := db.DeleteTunnel(c.Request.Context(), h.database, id)
 	if err != nil {
 		h.writeDBError(c, err, "delete tunnel failed")
 		return
 	}
 	_ = db.InsertAuditLog(c.Request.Context(), h.database, currentActor(c), "tunnel_delete", "tunnel", strconv.FormatInt(tunnel.ID, 10), fmt.Sprintf("deleted tunnel %s", tunnel.Name), c.ClientIP())
-	OK(c, tunnel)
+	OK(c, deleted)
 }
 
 func (h *TunnelHandler) start(c *gin.Context) {
@@ -245,7 +254,13 @@ func (h *TunnelHandler) setStatus(c *gin.Context, status model.TunnelStatus, act
 	if !ok {
 		return
 	}
-	tunnel, err := db.SetTunnelStatus(c.Request.Context(), h.database, id, status, "")
+	var tunnel model.Tunnel
+	var err error
+	if status == model.TunnelStatusStopped {
+		tunnel, err = db.SetTunnelStopped(c.Request.Context(), h.database, id, "")
+	} else {
+		tunnel, err = db.SetTunnelStatus(c.Request.Context(), h.database, id, status, "")
+	}
 	if err != nil {
 		h.writeDBError(c, err, "set tunnel status failed")
 		return

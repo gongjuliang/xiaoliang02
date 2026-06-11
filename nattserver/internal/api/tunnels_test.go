@@ -5,12 +5,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"nattserver/internal/db"
 	"nattserver/internal/model"
 )
 
@@ -34,8 +36,8 @@ func TestTunnelManagementFlow(t *testing.T) {
 	if createData.Secret == "" || createData.Key.SecretHint == "" {
 		t.Fatalf("create response did not include tunnel secret data: %+v", createData)
 	}
-	if created.Status != model.TunnelStatusStopped {
-		t.Fatalf("new tunnel status=%s want stopped", created.Status)
+	if created.Status != model.TunnelStatusWaiting {
+		t.Fatalf("new tunnel status=%s want waiting", created.Status)
 	}
 	assertTrafficStatCount(t, database, created.ID, 1)
 
@@ -91,6 +93,9 @@ func TestTunnelManagementFlow(t *testing.T) {
 	if stopped.Status != model.TunnelStatusStopped {
 		t.Fatalf("tunnel status=%s want stopped", stopped.Status)
 	}
+	if stopped.AutoStart {
+		t.Fatal("stopped tunnel should clear auto_start")
+	}
 
 	deleteResp := authorizedJSON(t, router, http.MethodDelete, "/api/server/v1/tunnels/1", tokens.AccessToken, nil)
 	var deleted model.Tunnel
@@ -119,6 +124,77 @@ func TestTunnelCreateRejectsPortOutsideConfiguredRange(t *testing.T) {
 		"remote_port": 9999,
 	}, http.StatusBadRequest)
 	assertResponseCode(t, resp, CodeBadRequest)
+}
+
+func TestTunnelCreateWithoutAutoStartStaysStopped(t *testing.T) {
+	router, database, tokens := setupAuthenticatedServerRouter(t)
+	defer database.Close()
+
+	createResp := authorizedJSON(t, router, http.MethodPost, "/api/server/v1/tunnels", tokens.AccessToken, map[string]any{
+		"name":        "manual-tunnel",
+		"remote_port": 18085,
+		"auto_start":  false,
+	})
+	var created tunnelSecretResponse
+	decodeResponseData(t, createResp, &created)
+	if created.Tunnel.Status != model.TunnelStatusStopped {
+		t.Fatalf("manual tunnel status=%s want stopped", created.Tunnel.Status)
+	}
+}
+
+func TestTunnelUpdateStoppedAutoStartMovesToWaiting(t *testing.T) {
+	router, database, tokens := setupAuthenticatedServerRouter(t)
+	defer database.Close()
+
+	createResp := authorizedJSON(t, router, http.MethodPost, "/api/server/v1/tunnels", tokens.AccessToken, map[string]any{
+		"name":        "manual-to-waiting",
+		"remote_port": 18086,
+		"auto_start":  false,
+	})
+	var created tunnelSecretResponse
+	decodeResponseData(t, createResp, &created)
+	if created.Tunnel.Status != model.TunnelStatusStopped {
+		t.Fatalf("initial status=%s want stopped", created.Tunnel.Status)
+	}
+
+	updateResp := authorizedJSON(t, router, http.MethodPut, "/api/server/v1/tunnels/1", tokens.AccessToken, map[string]any{
+		"name":        "manual-to-waiting",
+		"remote_host": "0.0.0.0",
+		"remote_port": 18086,
+		"auto_start":  true,
+	})
+	var updated model.Tunnel
+	decodeResponseData(t, updateResp, &updated)
+	if updated.Status != model.TunnelStatusWaiting || !updated.AutoStart {
+		t.Fatalf("updated tunnel=%+v want waiting auto_start=true", updated)
+	}
+}
+
+func TestTunnelDeleteDisconnectsRuntimeAndInvalidatesSecret(t *testing.T) {
+	runtime := &fakeTunnelRuntime{}
+	router, database, tokens := setupAuthenticatedServerRouterWithRuntime(t, runtime)
+	defer database.Close()
+
+	createResp := authorizedJSON(t, router, http.MethodPost, "/api/server/v1/tunnels", tokens.AccessToken, map[string]any{
+		"name":        "delete-runtime",
+		"remote_port": 18087,
+		"auto_start":  true,
+	})
+	var created tunnelSecretResponse
+	decodeResponseData(t, createResp, &created)
+
+	deleteResp := authorizedJSON(t, router, http.MethodDelete, "/api/server/v1/tunnels/1", tokens.AccessToken, nil)
+	var deleted model.Tunnel
+	decodeResponseData(t, deleteResp, &deleted)
+	if deleted.ID != created.Tunnel.ID {
+		t.Fatalf("deleted tunnel id=%d want=%d", deleted.ID, created.Tunnel.ID)
+	}
+	if !runtime.stopped[created.Tunnel.ID] || !runtime.disconnected[created.Tunnel.ID] {
+		t.Fatalf("runtime did not stop and disconnect deleted tunnel: stopped=%v disconnected=%v", runtime.stopped, runtime.disconnected)
+	}
+	if _, err := db.AuthenticateTunnelSecret(context.Background(), database, created.Secret); !errors.Is(err, db.ErrNotFound) {
+		t.Fatalf("deleted tunnel secret should be invalid, err=%v", err)
+	}
 }
 
 func TestTunnelCreateIgnoresLegacyLocalTargetFields(t *testing.T) {
@@ -161,7 +237,7 @@ func TestTunnelStartReturnsClearConflictErrors(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			router, database, tokens := setupAuthenticatedServerRouterWithRuntime(t, fakeTunnelRuntime{startErr: tc.err})
+			router, database, tokens := setupAuthenticatedServerRouterWithRuntime(t, &fakeTunnelRuntime{startErr: tc.err})
 			defer database.Close()
 
 			createResp := authorizedJSON(t, router, http.MethodPost, "/api/server/v1/tunnels", tokens.AccessToken, map[string]any{
@@ -283,25 +359,36 @@ func TestTunnelListFallsBackToSecretHintForLegacyKeys(t *testing.T) {
 }
 
 type fakeTunnelRuntime struct {
-	startErr error
-	stopErr  error
+	startErr     error
+	stopErr      error
+	stopped      map[int64]bool
+	disconnected map[int64]bool
 }
 
-func (r fakeTunnelRuntime) StartTunnel(ctx context.Context, id int64) (model.Tunnel, error) {
+func (r *fakeTunnelRuntime) StartTunnel(ctx context.Context, id int64) (model.Tunnel, error) {
 	if r.startErr != nil {
 		return model.Tunnel{}, r.startErr
 	}
 	return model.Tunnel{ID: id, Status: model.TunnelStatusRunning}, nil
 }
 
-func (r fakeTunnelRuntime) StopTunnel(ctx context.Context, id int64) (model.Tunnel, error) {
+func (r *fakeTunnelRuntime) StopTunnel(ctx context.Context, id int64) (model.Tunnel, error) {
 	if r.stopErr != nil {
 		return model.Tunnel{}, r.stopErr
 	}
+	if r.stopped == nil {
+		r.stopped = make(map[int64]bool)
+	}
+	r.stopped[id] = true
 	return model.Tunnel{ID: id, Status: model.TunnelStatusStopped}, nil
 }
 
-func (r fakeTunnelRuntime) DisconnectClient(clientID int64) {}
+func (r *fakeTunnelRuntime) DisconnectTunnel(id int64) {
+	if r.disconnected == nil {
+		r.disconnected = make(map[int64]bool)
+	}
+	r.disconnected[id] = true
+}
 
 func authorizedJSONAllowStatus(t *testing.T, router http.Handler, method string, path string, accessToken string, body any, wantStatus int) *httptest.ResponseRecorder {
 	t.Helper()

@@ -125,7 +125,7 @@ func (s *Server) StopTunnel(ctx context.Context, id int64) (model.Tunnel, error)
 			s.logError("send tunnel_stop failed tunnel_id=%d: %v", tunnel.ID, err)
 		}
 	}
-	return db.SetTunnelStatus(ctx, s.database, id, model.TunnelStatusStopped, "")
+	return db.SetTunnelStopped(ctx, s.database, id, "")
 }
 
 func (s *Server) sendDataClose(tunnelID int64, connectionID string, code string, message string) {

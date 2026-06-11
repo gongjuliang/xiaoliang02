@@ -43,7 +43,7 @@ func TestRouterServesEmbeddedFrontend(t *testing.T) {
 	_ = getFrontend(t, router, "/agreement.html")
 
 	tunnels := getFrontend(t, router, "/tunnels.html")
-	assertContainsAll(t, tunnels, "t.secret", "secret_hint", "maskSecret", "show-secret", "renderDetailText", "show-detail", "formatBytes", "bytes_in", "bytes_out", "last_error", `id="as" type="checkbox" checked`, "nattuser 连接后自动启动")
+	assertContainsAll(t, tunnels, "t.secret", "secret_hint", "maskSecret", "show-secret", "renderDetailText", "show-detail", "formatBytes", "bytes_in", "bytes_out", "last_error", `id="as" type="checkbox" checked`, "auto_start")
 
 	configPage := getFrontend(t, router, "/config.html")
 	assertContainsAll(t, configPage, "renderReadonlyConfig", "hot_reload", "currentValue", "placeholder")
@@ -55,7 +55,7 @@ func TestRouterServesEmbeddedFrontend(t *testing.T) {
 	}
 
 	loginPage := getFrontend(t, router, "/login.html")
-	assertContainsAll(t, loginPage, "工具人小良-内网穿透服务端", "agree_terms", "已阅读并同意《用户协议》", "captchaImage", "captchaRefresh", "captcha_code", "/static/js/sm2.js")
+	assertContainsAll(t, loginPage, "工具人小良-内网穿透服务端", "agree_terms", "已阅读并同意", "/agreement.html", "captchaImage", "captchaRefresh", "captcha_code", "/static/js/sm2.js")
 	if strings.Contains(loginPage, `value="admin"`) {
 		t.Fatalf("login page must not prefill admin username: %s", loginPage)
 	}
@@ -65,7 +65,7 @@ func TestRouterServesEmbeddedFrontend(t *testing.T) {
 	assertContainsAll(t, css, ".app-shell", ".check-row", ".terms-row", "overflow-wrap: anywhere")
 
 	js := getFrontend(t, router, "/static/js/app.js")
-	assertContainsAll(t, js, "request: request", "escapeHtml: escapeHtml", "badge: badge", "logout: logout", "captcha_id", "image_url", "agree_terms", "请先阅读并同意用户协议", "loadCaptcha", "loadSM2PublicKey", "encryptPasswordForLogin", "public_key_hex")
+	assertContainsAll(t, js, "request: request", "escapeHtml: escapeHtml", "badge: badge", "logout: logout", "captcha_id", "image_url", "agree_terms", "loadCaptcha", "loadSM2PublicKey", "encryptPasswordForLogin", "public_key_hex", "waiting", "\\u5f85\\u8fde\\u63a5")
 	if strings.Contains(js, `password: $('[name="password"]').val()`) {
 		t.Fatalf("app js must not submit plaintext password directly: %s", js)
 	}
