@@ -293,6 +293,57 @@ func TestServerMCPCreatesStartsStopsAndDeletesTunnelWithAuditLogs(t *testing.T) 
 	}
 }
 
+func TestServerMCPCreateTunnelDefaultsAutoStartToTrue(t *testing.T) {
+	router, database, _ := setupServerMCPRouterWithRuntime(t)
+	defer database.Close()
+
+	rec := callServerMCP(t, router, "server-mcp-token", "server.create_tunnel", map[string]any{
+		"name":        "mcp-default-autostart",
+		"protocol":    "tcp",
+		"remote_host": "0.0.0.0",
+		"remote_port": 18082,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var createdPayload struct {
+		Tunnel model.Tunnel `json:"tunnel"`
+	}
+	decodeMCPToolStructured(t, rec, &createdPayload)
+	if !createdPayload.Tunnel.AutoStart {
+		t.Fatalf("auto_start=false want default true: %+v", createdPayload.Tunnel)
+	}
+	if createdPayload.Tunnel.Status != model.TunnelStatusWaiting {
+		t.Fatalf("status=%s want=%s", createdPayload.Tunnel.Status, model.TunnelStatusWaiting)
+	}
+}
+
+func TestServerMCPCreateTunnelHonorsExplicitAutoStartFalse(t *testing.T) {
+	router, database, _ := setupServerMCPRouterWithRuntime(t)
+	defer database.Close()
+
+	rec := callServerMCP(t, router, "server-mcp-token", "server.create_tunnel", map[string]any{
+		"name":        "mcp-manual-start",
+		"protocol":    "tcp",
+		"remote_host": "0.0.0.0",
+		"remote_port": 18083,
+		"auto_start":  false,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var createdPayload struct {
+		Tunnel model.Tunnel `json:"tunnel"`
+	}
+	decodeMCPToolStructured(t, rec, &createdPayload)
+	if createdPayload.Tunnel.AutoStart {
+		t.Fatalf("auto_start=true want explicit false: %+v", createdPayload.Tunnel)
+	}
+	if createdPayload.Tunnel.Status != model.TunnelStatusStopped {
+		t.Fatalf("status=%s want=%s", createdPayload.Tunnel.Status, model.TunnelStatusStopped)
+	}
+}
+
 func setupServerMCPRouter(t *testing.T) (http.Handler, *sql.DB) {
 	t.Helper()
 

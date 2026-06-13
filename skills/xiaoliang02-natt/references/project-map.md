@@ -99,7 +99,7 @@ Server tools:
 - `server.list_clients`
 - `server.get_client`
 - `server.list_tunnels`
-- `server.create_tunnel`
+- `server.create_tunnel` (omitted `auto_start` defaults to `true`, initial status `waiting`)
 - `server.start_tunnel`
 - `server.stop_tunnel`
 - `server.delete_tunnel`
@@ -109,12 +109,16 @@ Client tools:
 
 - `client.list_tunnel_connections`
 - `client.list_servers`
+- `client.create_tunnel_connection`
+- `client.delete_tunnel_connection`
 - `client.connect_tunnel`
 - `client.connect_server`
 - `client.disconnect_tunnel`
 - `client.disconnect_server`
 - `client.list_tunnels`
 - `client.get_network_status`
+
+`client.create_tunnel_connection` requires `name`, `server_host`, `client_secret`, `local_host`, and `local_port`. Omitted or zero `server_port` / `data_port` use the client's `server_defaults` config.
 
 ## Troubleshooting
 

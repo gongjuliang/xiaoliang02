@@ -47,7 +47,7 @@ func NewRouter(cfg *config.Config, database *sql.DB, log *logger.Logger) *gin.En
 		NewServerHandler(database, log, &cfg.ServerDefaults).RegisterRoutes(protected)
 		NewOpsHandler(database, log, cfg).RegisterRoutes(protected)
 	}
-	mcp.RegisterClientRoutes(router, database, log)
+	mcp.RegisterClientRoutes(router, database, log, cfg.ServerDefaults)
 
 	router.NoRoute(func(c *gin.Context) {
 		Fail(c, http.StatusNotFound, 40401, "resource not found")

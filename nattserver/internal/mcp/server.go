@@ -98,7 +98,7 @@ type tunnelParams struct {
 	Protocol   string `json:"protocol"`
 	RemoteHost string `json:"remote_host"`
 	RemotePort int    `json:"remote_port"`
-	AutoStart  bool   `json:"auto_start"`
+	AutoStart  *bool  `json:"auto_start"`
 	Remark     string `json:"remark"`
 }
 
@@ -301,7 +301,7 @@ func (h *serverHandler) createTunnel(ctx context.Context, raw json.RawMessage) (
 		Protocol:   model.TunnelProtocolTCP,
 		RemoteHost: params.RemoteHost,
 		RemotePort: params.RemotePort,
-		AutoStart:  params.AutoStart,
+		AutoStart:  params.autoStartValue(),
 		Remark:     params.Remark,
 	})
 	if err != nil {
@@ -401,6 +401,13 @@ func (h *serverHandler) validateTunnelParams(params *tunnelParams) error {
 	default:
 		return nil
 	}
+}
+
+func (p tunnelParams) autoStartValue() bool {
+	if p.AutoStart == nil {
+		return true
+	}
+	return *p.AutoStart
 }
 
 func (h *serverHandler) audit(ctx context.Context, action string, tunnelID int64, content string) {
@@ -597,7 +604,7 @@ func tunnelCreateSchema() map[string]any {
 		"protocol":    map[string]any{"type": "string", "enum": []string{"tcp"}},
 		"remote_host": map[string]any{"type": "string"},
 		"remote_port": map[string]any{"type": "integer", "minimum": 1, "maximum": 65535},
-		"auto_start":  map[string]any{"type": "boolean"},
+		"auto_start":  map[string]any{"type": "boolean", "default": true, "description": "Omitted value defaults to true and creates a waiting tunnel."},
 		"remark":      map[string]any{"type": "string"},
 	}, []string{"name", "remote_port"})
 }

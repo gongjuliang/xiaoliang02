@@ -192,7 +192,7 @@ X-MCP-Token: <MCP_KEY>
 - `server.list_clients`
 - `server.get_client`
 - `server.list_tunnels`
-- `server.create_tunnel`
+- `server.create_tunnel`（省略 `auto_start` 时默认 `true`，创建后进入待连接状态）
 - `server.start_tunnel`
 - `server.stop_tunnel`
 - `server.delete_tunnel`
@@ -202,12 +202,16 @@ X-MCP-Token: <MCP_KEY>
 
 - `client.list_tunnel_connections`
 - `client.list_servers`
+- `client.create_tunnel_connection`
+- `client.delete_tunnel_connection`
 - `client.connect_tunnel`
 - `client.connect_server`
 - `client.disconnect_tunnel`
 - `client.disconnect_server`
 - `client.list_tunnels`
 - `client.get_network_status`
+
+客户端新增隧道连接工具参数：`name`、`server_host`、`client_secret`、`local_host`、`local_port` 为必填；`server_port`、`data_port` 可省略，省略时使用客户端配置里的默认控制端口和数据端口。
 
 工具发现示例：
 

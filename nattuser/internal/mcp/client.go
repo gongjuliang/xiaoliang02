@@ -31,8 +31,9 @@ const (
 )
 
 type clientHandler struct {
-	database *sql.DB
-	log      *logger.Logger
+	database       *sql.DB
+	log            *logger.Logger
+	serverDefaults config.ServerDefaultsConfig
 }
 
 type jsonRPCRequest struct {
@@ -85,6 +86,18 @@ type idParams struct {
 	ID int64 `json:"id"`
 }
 
+type createTunnelConnectionParams struct {
+	Name         string `json:"name"`
+	ServerHost   string `json:"server_host"`
+	ServerPort   int    `json:"server_port"`
+	DataPort     int    `json:"data_port"`
+	ClientSecret string `json:"client_secret"`
+	LocalHost    string `json:"local_host"`
+	LocalPort    int    `json:"local_port"`
+	AutoStart    bool   `json:"auto_start"`
+	Remark       string `json:"remark"`
+}
+
 type pageResult struct {
 	Items    any   `json:"items"`
 	Total    int64 `json:"total"`
@@ -118,7 +131,7 @@ type localTunnelStatus struct {
 	UpdatedAt          string                       `json:"updated_at"`
 }
 
-func NewClientRouter(cfg config.MCPConfig, database *sql.DB, log *logger.Logger) *gin.Engine {
+func NewClientRouter(cfg config.MCPConfig, database *sql.DB, log *logger.Logger, defaults ...config.ServerDefaultsConfig) *gin.Engine {
 	router := gin.New()
 	router.Use(gin.Recovery())
 	if database != nil {
@@ -127,7 +140,7 @@ func NewClientRouter(cfg config.MCPConfig, database *sql.DB, log *logger.Logger)
 			_ = db.UpsertSetting(context.Background(), database, "mcp.access_token", cfg.AccessToken)
 		}
 	}
-	RegisterClientRoutes(router, database, log)
+	RegisterClientRoutes(router, database, log, defaults...)
 
 	router.NoRoute(func(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "resource not found"})
@@ -135,10 +148,11 @@ func NewClientRouter(cfg config.MCPConfig, database *sql.DB, log *logger.Logger)
 	return router
 }
 
-func RegisterClientRoutes(router *gin.Engine, database *sql.DB, log *logger.Logger) {
+func RegisterClientRoutes(router *gin.Engine, database *sql.DB, log *logger.Logger, defaults ...config.ServerDefaultsConfig) {
 	handler := &clientHandler{
-		database: database,
-		log:      log,
+		database:       database,
+		log:            log,
+		serverDefaults: resolveServerDefaults(defaults),
 	}
 
 	protected := router.Group("")
@@ -229,6 +243,10 @@ func (h *clientHandler) executeTool(ctx context.Context, tool string, raw json.R
 	switch tool {
 	case "client.list_tunnel_connections", "client.list_servers":
 		return h.listServers(ctx, raw)
+	case "client.create_tunnel_connection":
+		return h.createTunnelConnection(ctx, raw)
+	case "client.delete_tunnel_connection":
+		return h.deleteTunnelConnection(ctx, raw)
 	case "client.connect_tunnel", "client.connect_server":
 		return h.setServerStatus(ctx, raw, model.ServerConnectionStatusConnected, "mcp_server_connect", "mcp connected server")
 	case "client.disconnect_tunnel", "client.disconnect_server":
@@ -252,6 +270,81 @@ func (h *clientHandler) listServers(ctx context.Context, raw json.RawMessage) (a
 		return nil, translateDBError(err, "list servers failed")
 	}
 	return pageResult{Items: servers, Total: total, Page: params.Page, PageSize: params.PageSize}, nil
+}
+
+func (h *clientHandler) createTunnelConnection(ctx context.Context, raw json.RawMessage) (any, error) {
+	var params createTunnelConnectionParams
+	if err := bindParams(raw, &params); err != nil {
+		return nil, err
+	}
+	if err := h.validateCreateTunnelConnectionParams(&params); err != nil {
+		return nil, err
+	}
+	connection, err := db.CreateServerConnection(ctx, h.database, db.CreateServerConnectionParams{
+		Name:         params.Name,
+		ServerHost:   params.ServerHost,
+		ServerPort:   params.ServerPort,
+		DataPort:     params.DataPort,
+		ClientSecret: params.ClientSecret,
+		LocalHost:    params.LocalHost,
+		LocalPort:    params.LocalPort,
+		AutoStart:    params.AutoStart,
+		Remark:       params.Remark,
+	})
+	if err != nil {
+		return nil, translateDBError(err, "create tunnel connection failed")
+	}
+	h.audit(ctx, "mcp_tunnel_connection_create", connection.ID, fmt.Sprintf("mcp created tunnel connection %s", connection.Name))
+	return connection, nil
+}
+
+func (h *clientHandler) deleteTunnelConnection(ctx context.Context, raw json.RawMessage) (any, error) {
+	var params idParams
+	if err := bindParams(raw, &params); err != nil {
+		return nil, err
+	}
+	if params.ID <= 0 {
+		return nil, fmt.Errorf("id is required")
+	}
+	connection, err := db.DeleteServerConnection(ctx, h.database, params.ID)
+	if err != nil {
+		return nil, translateDBError(err, "delete tunnel connection failed")
+	}
+	h.audit(ctx, "mcp_tunnel_connection_delete", connection.ID, fmt.Sprintf("mcp deleted tunnel connection %s", connection.Name))
+	return connection, nil
+}
+
+func (h *clientHandler) validateCreateTunnelConnectionParams(params *createTunnelConnectionParams) error {
+	params.Name = strings.TrimSpace(params.Name)
+	params.ServerHost = strings.TrimSpace(params.ServerHost)
+	params.ClientSecret = strings.TrimSpace(params.ClientSecret)
+	params.LocalHost = strings.TrimSpace(params.LocalHost)
+	params.Remark = strings.TrimSpace(params.Remark)
+	if params.ServerPort == 0 {
+		params.ServerPort = h.serverDefaults.ControlPort
+	}
+	if params.DataPort == 0 {
+		params.DataPort = h.serverDefaults.DataPort
+	}
+
+	switch {
+	case params.Name == "":
+		return fmt.Errorf("name is required")
+	case params.ServerHost == "":
+		return fmt.Errorf("server_host is required")
+	case !validPort(params.ServerPort):
+		return fmt.Errorf("server_port must be between 1 and 65535")
+	case !validPort(params.DataPort):
+		return fmt.Errorf("data_port must be between 1 and 65535")
+	case params.ClientSecret == "":
+		return fmt.Errorf("client_secret is required")
+	case params.LocalHost == "":
+		return fmt.Errorf("local_host is required")
+	case !validPort(params.LocalPort):
+		return fmt.Errorf("local_port must be between 1 and 65535")
+	default:
+		return nil
+	}
 }
 
 func (h *clientHandler) setServerStatus(ctx context.Context, raw json.RawMessage, status model.ServerConnectionStatus, action string, contentPrefix string) (any, error) {
@@ -426,6 +519,10 @@ func (p pageParams) offset() int {
 	return (page - 1) * p.limit()
 }
 
+func validPort(port int) bool {
+	return port > 0 && port <= 65535
+}
+
 func writeJSONRPCResult(c *gin.Context, id json.RawMessage, result any) {
 	c.JSON(http.StatusOK, jsonRPCResponse{JSONRPC: jsonRPCVersion, ID: id, Result: result})
 }
@@ -464,10 +561,19 @@ func translateDBError(err error, fallback string) error {
 	}
 }
 
+func resolveServerDefaults(values []config.ServerDefaultsConfig) config.ServerDefaultsConfig {
+	if len(values) > 0 {
+		return values[0]
+	}
+	return config.Default().ServerDefaults
+}
+
 func clientTools() []mcpTool {
 	return []mcpTool{
 		{Name: "client.list_tunnel_connections", Description: "List configured NATT server tunnel connections.", InputSchema: pageSchema()},
 		{Name: "client.list_servers", Description: "Alias of client.list_tunnel_connections.", InputSchema: pageSchema()},
+		{Name: "client.create_tunnel_connection", Description: "Create one NATT server tunnel connection on the client.", InputSchema: tunnelConnectionCreateSchema()},
+		{Name: "client.delete_tunnel_connection", Description: "Delete one NATT server tunnel connection by id.", InputSchema: idSchema()},
 		{Name: "client.connect_tunnel", Description: "Mark one tunnel connection as connected.", InputSchema: idSchema()},
 		{Name: "client.connect_server", Description: "Alias of client.connect_tunnel.", InputSchema: idSchema()},
 		{Name: "client.disconnect_tunnel", Description: "Stop one tunnel connection.", InputSchema: idSchema()},
@@ -488,6 +594,20 @@ func idSchema() map[string]any {
 	return objectSchema(map[string]any{
 		"id": map[string]any{"type": "integer", "minimum": 1},
 	}, []string{"id"})
+}
+
+func tunnelConnectionCreateSchema() map[string]any {
+	return objectSchema(map[string]any{
+		"name":          map[string]any{"type": "string"},
+		"server_host":   map[string]any{"type": "string"},
+		"server_port":   map[string]any{"type": "integer", "minimum": 0, "maximum": 65535, "description": "0 or omitted uses server_defaults.control_port"},
+		"data_port":     map[string]any{"type": "integer", "minimum": 0, "maximum": 65535, "description": "0 or omitted uses server_defaults.data_port"},
+		"client_secret": map[string]any{"type": "string"},
+		"local_host":    map[string]any{"type": "string"},
+		"local_port":    map[string]any{"type": "integer", "minimum": 1, "maximum": 65535},
+		"auto_start":    map[string]any{"type": "boolean"},
+		"remark":        map[string]any{"type": "string"},
+	}, []string{"name", "server_host", "client_secret", "local_host", "local_port"})
 }
 
 func objectSchema(properties map[string]any, required []string) map[string]any {

@@ -122,7 +122,10 @@ func TestClientMCPInitializesListsToolsAndRejectsOldPath(t *testing.T) {
 		} `json:"tools"`
 	}
 	decodeMCPResult(t, listRec, &listResult)
-	if !hasTool(listResult.Tools, "client.list_tunnel_connections") || !hasTool(listResult.Tools, "client.get_network_status") {
+	if !hasTool(listResult.Tools, "client.list_tunnel_connections") ||
+		!hasTool(listResult.Tools, "client.create_tunnel_connection") ||
+		!hasTool(listResult.Tools, "client.delete_tunnel_connection") ||
+		!hasTool(listResult.Tools, "client.get_network_status") {
 		t.Fatalf("tools/list missing expected tools: %+v", listResult.Tools)
 	}
 
@@ -220,6 +223,83 @@ func TestClientMCPConnectsDisconnectsAndWritesAuditLogs(t *testing.T) {
 	}
 }
 
+func TestClientMCPCreatesAndDeletesTunnelConnection(t *testing.T) {
+	router, database := setupClientMCPRouter(t)
+	defer database.Close()
+
+	rec := callClientMCP(t, router, "client-mcp-token", "client.create_tunnel_connection", map[string]any{
+		"name":          "mcp-created",
+		"server_host":   "10.0.0.20",
+		"client_secret": "must-not-leak",
+		"local_host":    "127.0.0.1",
+		"local_port":    8088,
+		"auto_start":    true,
+		"remark":        "created by mcp",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var created model.ServerConnection
+	decodeMCPToolStructured(t, rec, &created)
+	if created.ID == 0 || created.Name != "mcp-created" || created.ServerHost != "10.0.0.20" {
+		t.Fatalf("unexpected created connection: %+v", created)
+	}
+	if created.ServerPort != 25511 || created.DataPort != 25512 {
+		t.Fatalf("created ports=%d/%d want defaults 25511/25512", created.ServerPort, created.DataPort)
+	}
+	if created.LocalHost != "127.0.0.1" || created.LocalPort != 8088 || !created.AutoStart {
+		t.Fatalf("unexpected local target/autostart: %+v", created)
+	}
+
+	rec = callClientMCP(t, router, "client-mcp-token", "client.delete_tunnel_connection", map[string]any{"id": created.ID})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var deleted model.ServerConnection
+	decodeMCPToolStructured(t, rec, &deleted)
+	if deleted.ID != created.ID || deleted.Name != created.Name {
+		t.Fatalf("unexpected deleted connection: %+v want id=%d", deleted, created.ID)
+	}
+	if _, err := db.GetServerConnectionByID(context.Background(), database, created.ID); err != db.ErrNotFound {
+		t.Fatalf("deleted connection lookup err=%v want ErrNotFound", err)
+	}
+
+	logs, total, err := db.ListAuditLogs(context.Background(), database, 20, 0)
+	if err != nil {
+		t.Fatalf("list audit logs: %v", err)
+	}
+	if total != 4 {
+		t.Fatalf("audit total=%d want=4 logs=%+v", total, logs)
+	}
+	for _, want := range []string{"mcp_tool_call", "mcp_tunnel_connection_create", "mcp_tunnel_connection_delete"} {
+		if !hasAuditAction(logs, want) {
+			t.Fatalf("missing audit action %s in %+v", want, logs)
+		}
+	}
+	for _, item := range logs {
+		if bytes.Contains([]byte(item.Content), []byte("must-not-leak")) {
+			t.Fatalf("audit leaked client secret: %+v", item)
+		}
+	}
+}
+
+func TestClientMCPRejectsInvalidTunnelConnectionCreateParams(t *testing.T) {
+	router, database := setupClientMCPRouter(t)
+	defer database.Close()
+
+	rec := callClientMCP(t, router, "client-mcp-token", "client.create_tunnel_connection", map[string]any{
+		"name":          "bad",
+		"server_host":   "10.0.0.20",
+		"client_secret": "secret",
+		"local_host":    "127.0.0.1",
+		"local_port":    70000,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("invalid create status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	assertMCPToolError(t, rec, "local_port")
+}
+
 func TestClientMCPListsLocalTunnels(t *testing.T) {
 	router, database := setupClientMCPRouter(t)
 	defer database.Close()
@@ -263,7 +343,10 @@ func setupClientMCPRouter(t *testing.T) (http.Handler, *sql.DB) {
 	router := NewClientRouter(config.MCPConfig{
 		Enabled:     true,
 		AccessToken: "client-mcp-token",
-	}, database, nil)
+	}, database, nil, config.ServerDefaultsConfig{
+		ControlPort: 25511,
+		DataPort:    25512,
+	})
 	return router, database
 }
 

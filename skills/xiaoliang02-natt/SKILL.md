@@ -31,6 +31,8 @@ Use this skill when working on the `xiaoliang02` intranet penetration project. P
 - New secrets must use the `xiaoliang_` prefix.
 - Password and secret hashes use the SM3 salt format: `salt8 + "$" + sm3(base64(salt8 + input))`.
 - MCP uses standard JSON-RPC Streamable HTTP at `POST /mcp`; do not use the old `/mcp/tools/call` path.
+- Server MCP `server.create_tunnel` defaults omitted `auto_start` to `true`, creating a `waiting` tunnel.
+- Client MCP can create/delete tunnel connections with `client.create_tunnel_connection` and `client.delete_tunnel_connection`.
 - Audit logs are JSONL files under `xiaoliang02_*/logs/audit/YYYY-MM-DD.jsonl`, not SQLite audit storage.
 
 ## Common Commands
