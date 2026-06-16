@@ -114,8 +114,8 @@ func (s *Server) Run(ctx context.Context) error {
 	}()
 
 	if s.log != nil {
-		s.log.Infof("内网穿透-服务端 control 服务 正在监听 %s", controlListener.Addr().String())
-		s.log.Infof("内网穿透-服务端 data 服务 正在监听 %s", dataListener.Addr().String())
+		s.log.Infof("小良内网穿透-服务端 control 服务 正在监听 %s", controlListener.Addr().String())
+		s.log.Infof("小良内网穿透-服务端 data 服务 正在监听 %s", dataListener.Addr().String())
 	}
 
 	errCh := make(chan error, 2)

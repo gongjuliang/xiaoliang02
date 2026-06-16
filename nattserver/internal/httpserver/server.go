@@ -65,10 +65,10 @@ func (s *Server) Run(ctx context.Context) error {
 			_, port, err := net.SplitHostPort(s.server.Addr)
 			if err == nil {
 				s.log.Infof("========================================================")
-				s.log.Infof("内网穿透-服务端 管理后台网址:%s://127.0.0.1:%s", scheme, port)
+				s.log.Infof("小良内网穿透-服务端 管理后台网址:%s://127.0.0.1:%s", scheme, port)
 				s.log.Infof("========================================================")
 			}
-			s.log.Infof("内网穿透-服务端 %s 服务 正在监听 %s", scheme, s.server.Addr)
+			s.log.Infof("小良内网穿透-服务端 %s 服务 正在监听 %s", scheme, s.server.Addr)
 
 		}
 		var err error
