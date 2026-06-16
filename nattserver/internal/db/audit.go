@@ -1,3 +1,6 @@
+// Package db 提供审计日志的文件存储功能。
+// 审计日志以JSONL格式写入logs/audit/YYYY-MM-DD.jsonl文件，
+// 支持配置审计日志目录、插入审计记录、分页查询和旧SQLite审计表迁移到JSONL。
 package db
 
 import (
@@ -16,8 +19,10 @@ import (
 	"nattserver/internal/model"
 )
 
+// auditMigrationSettingKey SQLite审计表迁移完成的标记键。
 const auditMigrationSettingKey = "audit.file_migration_done"
 
+// auditStore 审计日志存储全局状态（线程安全），记录当前审计日志目录。
 var auditStore = struct {
 	sync.RWMutex
 	dir string
@@ -25,6 +30,7 @@ var auditStore = struct {
 	dir: filepath.Join("xiaoliang02_server", "logs", "audit"),
 }
 
+// auditRecord 审计日志JSONL文件的内部记录结构体。
 type auditRecord struct {
 	ID         int64  `json:"id"`
 	Actor      string `json:"actor"`
@@ -36,6 +42,7 @@ type auditRecord struct {
 	CreatedAt  string `json:"created_at"`
 }
 
+// ConfigureAuditLogDir 配置审计日志目录并迁移旧SQLite审计数据。
 func ConfigureAuditLogDir(ctx context.Context, database *sql.DB, logDir string) error {
 	dir := filepath.Join(logDir, "audit")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -52,6 +59,7 @@ func ConfigureAuditLogDir(ctx context.Context, database *sql.DB, logDir string) 
 	return nil
 }
 
+// InsertAuditLog 写入一条审计日志到JSONL文件（纳秒时间戳作为唯一ID）。
 func InsertAuditLog(ctx context.Context, database *sql.DB, actor string, action string, targetType string, targetID string, content string, ip string) error {
 	if actor == "" {
 		actor = "anonymous"
@@ -69,6 +77,7 @@ func InsertAuditLog(ctx context.Context, database *sql.DB, actor string, action 
 	return appendAuditLog(record)
 }
 
+// appendAuditLog 将审计记录以JSONL格式追加到按日期命名的文件中。
 func appendAuditLog(record model.AuditLog) error {
 	auditStore.RLock()
 	dir := auditStore.dir
@@ -92,6 +101,7 @@ func appendAuditLog(record model.AuditLog) error {
 	return nil
 }
 
+// listAuditLogsFromFiles 从JSONL文件中分页读取审计日志（按时间倒序排列）。
 func listAuditLogsFromFiles(limit int, offset int) ([]model.AuditLog, int64, error) {
 	auditStore.RLock()
 	dir := auditStore.dir
@@ -123,6 +133,7 @@ func listAuditLogsFromFiles(limit int, offset int) ([]model.AuditLog, int64, err
 	return logs[offset:end], total, nil
 }
 
+// readAuditLogFile 读取单个JSONL文件的所有审计记录。
 func readAuditLogFile(path string) ([]model.AuditLog, error) {
 	file, err := os.Open(path)
 	if os.IsNotExist(err) {
@@ -151,6 +162,7 @@ func readAuditLogFile(path string) ([]model.AuditLog, error) {
 	return logs, nil
 }
 
+// migrateSQLiteAuditLogs 将SQLite audit_logs表中的历史数据迁移到JSONL文件。
 func migrateSQLiteAuditLogs(ctx context.Context, database *sql.DB) error {
 	done, err := auditMigrationDone(ctx, database)
 	if err != nil {
@@ -188,6 +200,7 @@ ORDER BY id ASC;`)
 	return UpsertSetting(ctx, database, auditMigrationSettingKey, "true")
 }
 
+// auditMigrationDone 检查审计日志迁移是否已完成。
 func auditMigrationDone(ctx context.Context, database *sql.DB) (bool, error) {
 	var value string
 	err := database.QueryRowContext(ctx, "SELECT value FROM settings WHERE key = ?", auditMigrationSettingKey).Scan(&value)
@@ -200,6 +213,7 @@ func auditMigrationDone(ctx context.Context, database *sql.DB) (bool, error) {
 	return value == "true", nil
 }
 
+// auditDate 从时间戳中提取日期字符串（YYYY-MM-DD格式），用于日志文件命名。
 func auditDate(createdAt string) string {
 	if len(createdAt) >= len("2006-01-02") {
 		return createdAt[:len("2006-01-02")]

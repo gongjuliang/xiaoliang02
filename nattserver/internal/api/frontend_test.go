@@ -31,7 +31,7 @@ func TestRouterServesEmbeddedFrontend(t *testing.T) {
 	router := NewRouter(cfg, database, nil)
 
 	index := getFrontend(t, router, "/")
-	assertContainsAll(t, index, "工具人小良-内网穿透服务端", "服务端控制台", "sessionStorage", "natt_server_active_view")
+	assertContainsAll(t, index, "小良内网穿透-服务端", "服务端控制台", "sessionStorage", "natt_server_active_view")
 	assertNotContainsAny(t, index, "NATT Server")
 
 	for _, path := range []string{"/login.html", "/dashboard.html", "/tunnels.html", "/config.html", "/mcp.html", "/audit.html"} {
@@ -55,7 +55,7 @@ func TestRouterServesEmbeddedFrontend(t *testing.T) {
 	}
 
 	loginPage := getFrontend(t, router, "/login.html")
-	assertContainsAll(t, loginPage, "工具人小良-内网穿透服务端", "agree_terms", "已阅读并同意", "/agreement.html", "captchaImage", "captchaRefresh", "captcha_code", "/static/js/sm2.js")
+	assertContainsAll(t, loginPage, "小良内网穿透-服务端", "agree_terms", "已阅读并同意", "/agreement.html", "captchaImage", "captchaRefresh", "captcha_code", "/static/js/sm2.js")
 	if strings.Contains(loginPage, `value="admin"`) {
 		t.Fatalf("login page must not prefill admin username: %s", loginPage)
 	}

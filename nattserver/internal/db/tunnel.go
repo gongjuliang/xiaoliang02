@@ -1,3 +1,6 @@
+// Package db 提供隧道(Tunnel)的数据库CRUD操作。
+// 包括隧道列表查询（含密钥和流量数据JOIN）、按ID查询、自动启动隧道查询、
+// 创建（含流量统计初始化）、更新、删除、状态变更等完整隧道管理功能。
 package db
 
 import (
@@ -9,30 +12,33 @@ import (
 	"nattserver/internal/model"
 )
 
+// CreateTunnelParams 创建隧道的参数结构体。
 type CreateTunnelParams struct {
-	Name       string
-	ClientID   int64
-	Protocol   model.TunnelProtocol
-	LocalHost  string
-	LocalPort  int
-	RemoteHost string
-	RemotePort int
-	AutoStart  bool
-	Remark     string
+	Name       string               // 隧道名称
+	ClientID   int64                // 关联的客户端ID（0表示无关联）
+	Protocol   model.TunnelProtocol // 传输协议（如tcp）
+	LocalHost  string               // 内网目标地址（由客户端配置）
+	LocalPort  int                  // 内网目标端口
+	RemoteHost string               // 公网监听地址
+	RemotePort int                  // 公网监听端口（唯一）
+	AutoStart  bool                 // 是否自动启动
+	Remark     string               // 备注
 }
 
+// UpdateTunnelParams 更新隧道的参数结构体。
 type UpdateTunnelParams struct {
-	Name       string
-	ClientID   int64
-	Protocol   model.TunnelProtocol
-	LocalHost  string
-	LocalPort  int
-	RemoteHost string
-	RemotePort int
-	AutoStart  bool
-	Remark     string
+	Name       string               // 隧道名称
+	ClientID   int64                // 关联的客户端ID
+	Protocol   model.TunnelProtocol // 传输协议
+	LocalHost  string               // 内网目标地址
+	LocalPort  int                  // 内网目标端口
+	RemoteHost string               // 公网监听地址
+	RemotePort int                  // 公网监听端口
+	AutoStart  bool                 // 是否自动启动
+	Remark     string               // 备注
 }
 
+// ListTunnels 分页查询隧道列表（LEFT JOIN tunnel_keys和traffic_stats获取密钥和流量数据）。
 func ListTunnels(ctx context.Context, database *sql.DB, clientID int64, limit int, offset int) ([]model.Tunnel, int64, error) {
 	var total int64
 	if err := database.QueryRowContext(ctx, "SELECT COUNT(1) FROM tunnels").Scan(&total); err != nil {
@@ -68,6 +74,7 @@ LIMIT ? OFFSET ?;`, limit, offset)
 	return tunnels, total, nil
 }
 
+// GetTunnelByID 按ID查询单个隧道，未找到返回ErrNotFound。
 func GetTunnelByID(ctx context.Context, database *sql.DB, id int64) (model.Tunnel, error) {
 	row := database.QueryRowContext(ctx, `
 SELECT id, name, COALESCE(client_id, 0), protocol, remote_host, remote_port, status, auto_start, last_error, remark, created_at, updated_at
@@ -83,6 +90,7 @@ WHERE id = ?;`, id)
 	return tunnel, nil
 }
 
+// ListAutoStartOnlineTunnels 查询所有auto_start=1且密钥在线启用的隧道列表。
 func ListAutoStartOnlineTunnels(ctx context.Context, database *sql.DB) ([]model.Tunnel, error) {
 	rows, err := database.QueryContext(ctx, `
 SELECT t.id, t.name, COALESCE(t.client_id, 0), t.protocol, t.remote_host, t.remote_port, t.status, t.auto_start, t.last_error, t.remark, t.created_at, t.updated_at
@@ -109,10 +117,13 @@ ORDER BY t.id ASC;`)
 	return tunnels, nil
 }
 
+// ListAutoStartTunnelsByClient 按客户端查询自动启动的隧道（委托给ListAutoStartOnlineTunnels）。
 func ListAutoStartTunnelsByClient(ctx context.Context, database *sql.DB, clientID int64) ([]model.Tunnel, error) {
 	return ListAutoStartOnlineTunnels(ctx, database)
 }
 
+// CreateTunnel 创建新隧道，在事务中同步创建traffic_stats和tunnel_keys记录。
+// auto_start=true时初始状态为waiting，否则为stopped。
 func CreateTunnel(ctx context.Context, database *sql.DB, params CreateTunnelParams) (model.Tunnel, error) {
 	var legacyClient model.Client
 	if params.ClientID > 0 {
@@ -170,6 +181,7 @@ VALUES(?, ?, ?, 'enabled', 'offline');`, id, legacyClient.SecretHash, legacyClie
 	return GetTunnelByID(ctx, database, id)
 }
 
+// UpdateTunnel 更新隧道配置，根据当前状态和auto_start变化自动转换状态（stopped↔waiting）。
 func UpdateTunnel(ctx context.Context, database *sql.DB, id int64, params UpdateTunnelParams) (model.Tunnel, error) {
 	result, err := database.ExecContext(ctx, `
 UPDATE tunnels
@@ -203,6 +215,7 @@ WHERE id = ?;`,
 	return GetTunnelByID(ctx, database, id)
 }
 
+// DeleteTunnel 删除隧道记录（级联删除关联的tunnel_keys和traffic_stats）。
 func DeleteTunnel(ctx context.Context, database *sql.DB, id int64) (model.Tunnel, error) {
 	tunnel, err := GetTunnelByID(ctx, database, id)
 	if err != nil {
@@ -214,6 +227,7 @@ func DeleteTunnel(ctx context.Context, database *sql.DB, id int64) (model.Tunnel
 	return tunnel, nil
 }
 
+// SetTunnelStatus 设置隧道状态和可选的错误信息，返回更新后的隧道。
 func SetTunnelStatus(ctx context.Context, database *sql.DB, id int64, status model.TunnelStatus, lastError string) (model.Tunnel, error) {
 	var result sql.Result
 	var err error
@@ -241,6 +255,7 @@ WHERE id = ?;`, status, lastError, id)
 	return GetTunnelByID(ctx, database, id)
 }
 
+// SetTunnelStopped 将隧道状态设置为stopped并清除auto_start标志，返回更新后的隧道。
 func SetTunnelStopped(ctx context.Context, database *sql.DB, id int64, lastError string) (model.Tunnel, error) {
 	var result sql.Result
 	var err error
@@ -268,10 +283,12 @@ WHERE id = ?;`, lastError, id)
 	return GetTunnelByID(ctx, database, id)
 }
 
+// tunnelScanner 隧道扫描器接口，抽象sql.Row和sql.Rows的Scan方法。
 type tunnelScanner interface {
 	Scan(dest ...any) error
 }
 
+// scanTunnel 从扫描器中读取一行隧道数据（不含密钥和流量字段）。
 func scanTunnel(scanner tunnelScanner) (model.Tunnel, error) {
 	var tunnel model.Tunnel
 	var autoStart int
@@ -300,6 +317,7 @@ func scanTunnel(scanner tunnelScanner) (model.Tunnel, error) {
 	return tunnel, nil
 }
 
+// scanTunnelWithSecret 从扫描器中读取一行隧道数据（含密钥明文和流量统计）。
 func scanTunnelWithSecret(scanner tunnelScanner) (model.Tunnel, error) {
 	var tunnel model.Tunnel
 	var autoStart int
@@ -336,6 +354,7 @@ func scanTunnelWithSecret(scanner tunnelScanner) (model.Tunnel, error) {
 	return tunnel, nil
 }
 
+// boolToInt 将bool转为int（true→1，false→0），用于SQLite的整数存储。
 func boolToInt(value bool) int {
 	if value {
 		return 1

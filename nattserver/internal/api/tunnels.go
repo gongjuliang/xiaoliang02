@@ -1,3 +1,6 @@
+// Package api 提供隧道(Tunnel)的Web API处理器。
+// 包含隧道的CRUD操作（创建/查询/更新/删除）、生命周期管理（启动/停止）、
+// 密钥管理（轮换/启用/禁用）等完整的REST API端点。
 package api
 
 import (
@@ -18,34 +21,45 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// TunnelHandler 隧道HTTP API处理器，封装数据库操作、日志记录、配置校验和运行时隧道控制。
 type TunnelHandler struct {
-	database *sql.DB
-	log      *logger.Logger
-	cfg      *config.TunnelConfig
-	runtime  TunnelRuntime
+	database *sql.DB              // 数据库连接
+	log      *logger.Logger       // 日志记录器
+	cfg      *config.TunnelConfig // 隧道配置（端口范围等）
+	runtime  TunnelRuntime        // 隧道运行时管理接口（启动/停止/断开）
 }
 
+// TunnelRuntime 隧道运行时管理接口，抽象出启动、停止和断开连接的运行时能力。
+// 由control.Server实现，注入到TunnelHandler中以实现API驱动的隧道控制。
 type TunnelRuntime interface {
 	StartTunnel(ctx context.Context, id int64) (model.Tunnel, error)
 	StopTunnel(ctx context.Context, id int64) (model.Tunnel, error)
 	DisconnectTunnel(id int64)
 }
 
+// tunnelRequest 隧道创建/更新的请求参数结构体。
 type tunnelRequest struct {
-	Name       string `json:"name" binding:"required"`
-	Protocol   string `json:"protocol"`
-	RemoteHost string `json:"remote_host"`
-	RemotePort int    `json:"remote_port" binding:"required"`
-	AutoStart  bool   `json:"auto_start"`
-	Remark     string `json:"remark"`
+	Name       string `json:"name" binding:"required"`        // 隧道名称（必填）
+	Protocol   string `json:"protocol"`                       // 协议类型（默认tcp）
+	RemoteHost string `json:"remote_host"`                    // 公网监听地址
+	RemotePort int    `json:"remote_port" binding:"required"` // 公网监听端口（必填）
+	AutoStart  bool   `json:"auto_start"`                     // 是否自动启动
+	Remark     string `json:"remark"`                         // 备注信息
 }
 
+// tunnelSecretResponse 隧道创建及密钥轮换时的响应体，同时返回隧道信息和明文密钥。
 type tunnelSecretResponse struct {
-	Tunnel model.Tunnel    `json:"tunnel"`
-	Key    model.TunnelKey `json:"key"`
-	Secret string          `json:"secret"`
+	Tunnel model.Tunnel    `json:"tunnel"` // 隧道信息
+	Key    model.TunnelKey `json:"key"`    // 密钥信息
+	Secret string          `json:"secret"` // 密钥明文（仅此时返回一次）
 }
 
+// NewTunnelHandler 创建隧道HTTP API处理器。
+// 参数database：数据库连接。
+// 参数log：日志记录器。
+// 参数cfg：隧道配置。
+// 参数runtime：隧道运行时控制器。
+// 返回值：初始化好的TunnelHandler。
 func NewTunnelHandler(database *sql.DB, log *logger.Logger, cfg *config.TunnelConfig, runtime TunnelRuntime) *TunnelHandler {
 	return &TunnelHandler{
 		database: database,
@@ -55,6 +69,16 @@ func NewTunnelHandler(database *sql.DB, log *logger.Logger, cfg *config.TunnelCo
 	}
 }
 
+// RegisterRoutes 在Gin路由组上注册隧道管理的所有REST端点。
+// POST /tunnels - 创建隧道
+// GET /tunnels - 分页查询隧道列表
+// PUT /tunnels/:id - 更新隧道
+// DELETE /tunnels/:id - 删除隧道
+// POST /tunnels/:id/start - 启动隧道
+// POST /tunnels/:id/stop - 停止隧道
+// POST /tunnels/:id/rotate-secret - 轮换隧道密钥
+// POST /tunnels/:id/enable-key - 启用隧道密钥
+// POST /tunnels/:id/disable-key - 禁用隧道密钥
 func (h *TunnelHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.GET("/tunnels", h.list)
 	group.POST("/tunnels", h.create)
@@ -67,6 +91,7 @@ func (h *TunnelHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.POST("/tunnels/:id/disable-key", h.disableKey)
 }
 
+// list 处理获取隧道列表的请求，支持分页查询。
 func (h *TunnelHandler) list(c *gin.Context) {
 	var page PageRequest
 	if err := c.ShouldBindQuery(&page); err != nil {
@@ -82,6 +107,8 @@ func (h *TunnelHandler) list(c *gin.Context) {
 	OK(c, NewPageResponse(tunnels, total, page))
 }
 
+// create 处理创建隧道的请求，包括参数校验、数据库创建和密钥生成。
+// 支持auto_start字段，为true时隧道创建后进入等待状态。
 func (h *TunnelHandler) create(c *gin.Context) {
 	var req tunnelRequest
 	if !h.bindAndValidateTunnelRequest(c, &req) {
@@ -115,6 +142,7 @@ func (h *TunnelHandler) create(c *gin.Context) {
 	OK(c, tunnelSecretResponse{Tunnel: tunnel, Key: key, Secret: secret})
 }
 
+// update 处理更新隧道配置的请求，支持修改名称、公网地址/端口、auto_start等字段。
 func (h *TunnelHandler) update(c *gin.Context) {
 	id, ok := parseIDParam(c)
 	if !ok {

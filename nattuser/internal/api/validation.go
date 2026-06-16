@@ -1,3 +1,6 @@
+// Package api 提供请求体JSON绑定和参数校验的错误处理。
+// 当Gin的ShouldBindJSON返回验证错误时，自动将字段级校验错误
+// 转换为标准API错误响应，使用snake_case格式匹配前端期望的字段名。
 package api
 
 import (

@@ -1,3 +1,6 @@
+// Package db 提供数据库版本迁移管理功能。
+// 通过schema_migrations表追踪已应用的迁移版本，支持新数据库自动建表、
+// 旧数据库增量升级、旧密码哈希重置和旧审计日志迁移到JSONL文件。
 package db
 
 import (

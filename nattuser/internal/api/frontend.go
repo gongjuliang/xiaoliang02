@@ -1,3 +1,6 @@
+// Package api 提供Web前端页面的路由注册功能。
+// 将嵌入的HTML模板文件（login/index/dashboard等）绑定到对应的HTTP路径，
+// 并设置jQuery/Layui等静态资源的服务路径。
 package api
 
 import (
@@ -30,6 +33,9 @@ func registerFrontendRoutes(router *gin.Engine) {
 	})
 	router.GET("/agreement.html", func(c *gin.Context) {
 		c.HTML(http.StatusOK, "agreement.html", nil)
+	})
+	router.GET("/resetpwd.html", func(c *gin.Context) {
+		c.HTML(http.StatusOK, "resetpwd.html", nil)
 	})
 	for _, page := range []struct {
 		Path     string

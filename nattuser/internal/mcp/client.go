@@ -1,3 +1,6 @@
+// Package mcp 提供NATT客户端的MCP（Model Context Protocol）Streamable HTTP JSON-RPC接口。
+// 支持Codex等AI工具自动发现和调用，提供服务端连接管理、隧道连接管理、
+// 本机网络状态查询等工具。使用Bearer Token鉴权。
 package mcp
 
 import (

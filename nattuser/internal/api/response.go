@@ -1,3 +1,6 @@
+// Package api 提供统一的API响应格式和分页支持。
+// 定义标准JSON响应结构体（code/message/data/request_id）、
+// 分页请求/响应封装和业务状态码常量。
 package api
 
 import (

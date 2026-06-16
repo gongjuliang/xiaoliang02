@@ -1,3 +1,6 @@
+// Package db 提供审计日志的文件存储功能。
+// 审计日志以JSONL格式写入logs/audit/YYYY-MM-DD.jsonl文件，
+// 支持配置审计日志目录、插入审计记录、分页查询和旧SQLite审计表迁移。
 package db
 
 import (

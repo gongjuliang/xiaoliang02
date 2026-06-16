@@ -1,3 +1,6 @@
+// Package db 提供本地隧道绑定(LocalTunnel)的数据库CRUD操作。
+// 本地隧道绑定将服务端的隧道ID映射到内网目标地址/端口，
+// 一个服务端连接(server_connection)可绑定多个服务端隧道(server_tunnel_id)。
 package db
 
 import (

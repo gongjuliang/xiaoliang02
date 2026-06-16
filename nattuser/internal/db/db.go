@@ -1,3 +1,6 @@
+// Package db 提供SQLite数据库的初始化和连接管理。
+// 使用modernc.org/sqlite（纯Go的SQLite实现，无需CGO），
+// 自动创建数据库目录、配置WAL模式和外键约束、执行数据迁移。
 package db
 
 import (

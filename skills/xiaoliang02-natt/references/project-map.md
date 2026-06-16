@@ -37,8 +37,8 @@ D:\2025Code\ai\natt
 
 ## Current Public Behavior
 
-- Server Web brand: `工具人小良-内网穿透服务端`.
-- Client Web brand: `工具人小良-内网穿透客户端`.
+- Server Web brand: `小良内网穿透-服务端`.
+- Client Web brand: `小良内网穿透-客户端`.
 - Default startup requires runtime-root config:
   - Server: `xiaoliang02_server/config/config.json`.
   - Client: `xiaoliang02_user/config/config.json`.

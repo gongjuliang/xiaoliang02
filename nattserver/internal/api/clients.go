@@ -1,3 +1,6 @@
+// Package api 提供客户端授权管理的Web API处理器。
+// 包含客户端CRUD（创建/查询/更新）、状态管理（启用/禁用）、
+// 密钥轮换等完整的客户端生命周期管理端点。
 package api
 
 import (
@@ -16,31 +19,44 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// ClientHandler 客户端管理HTTP API处理器，提供客户端的完整生命周期管理。
+// 包含客户端的增删改查以及启用/禁用/密钥轮换等状态管理功能。
 type ClientHandler struct {
-	database *sql.DB
-	log      *logger.Logger
-	closer   ClientConnectionCloser
+	database *sql.DB                // 数据库连接
+	log      *logger.Logger         // 日志记录器
+	closer   ClientConnectionCloser // 客户端连接关闭器（禁用客户端时断开在线连接）
 }
 
+// ClientConnectionCloser 客户端连接关闭器接口，用于在禁用客户端时断开其控制连接。
+// 由control.Server实现，注入到ClientHandler中。
 type ClientConnectionCloser interface {
 	DisconnectClient(clientID int64)
 }
 
+// createClientRequest 创建客户端时的请求参数。
 type createClientRequest struct {
-	Name   string `json:"name" binding:"required"`
-	Remark string `json:"remark"`
+	Name   string `json:"name" binding:"required"` // 客户端名称（必填）
+	Remark string `json:"remark"`                  // 备注信息
 }
 
+// updateClientRequest 更新客户端时的请求参数。
 type updateClientRequest struct {
-	Name   string `json:"name" binding:"required"`
-	Remark string `json:"remark"`
+	Name   string `json:"name" binding:"required"` // 客户端名称（必填）
+	Remark string `json:"remark"`                  // 备注信息
 }
 
+// clientSecretResponse 客户端创建及密钥轮换时的响应体，同时返回客户端信息和明文密钥。
+// 密钥明文仅在创建或轮换时返回一次，之后不可再获取。
 type clientSecretResponse struct {
-	Client       model.Client `json:"client"`
-	ClientSecret string       `json:"client_secret"`
+	Client       model.Client `json:"client"`        // 客户端信息
+	ClientSecret string       `json:"client_secret"` // 客户端密钥明文（仅此时可见）
 }
 
+// NewClientHandler 创建客户端管理HTTP API处理器。
+// 参数database：数据库连接。
+// 参数log：日志记录器。
+// 参数closer：客户端连接关闭器（禁用客户端时使用）。
+// 返回值：初始化好的ClientHandler。
 func NewClientHandler(database *sql.DB, log *logger.Logger, closer ClientConnectionCloser) *ClientHandler {
 	return &ClientHandler{
 		database: database,
@@ -49,6 +65,7 @@ func NewClientHandler(database *sql.DB, log *logger.Logger, closer ClientConnect
 	}
 }
 
+// RegisterRoutes 注册客户端管理的REST端点：列表/创建/更新/启用/禁用/密钥轮换。
 func (h *ClientHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.GET("/clients", h.list)
 	group.POST("/clients", h.create)
@@ -58,6 +75,7 @@ func (h *ClientHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.POST("/clients/:id/rotate-secret", h.rotateSecret)
 }
 
+// list 处理分页查询客户端列表的请求。
 func (h *ClientHandler) list(c *gin.Context) {
 	var page PageRequest
 	if err := c.ShouldBindQuery(&page); err != nil {
@@ -73,6 +91,7 @@ func (h *ClientHandler) list(c *gin.Context) {
 	OK(c, NewPageResponse(clients, total, page))
 }
 
+// create 创建新客户端，生成"xiaoliang_"前缀的密钥并返回明文。
 func (h *ClientHandler) create(c *gin.Context) {
 	var req createClientRequest
 	if !bindJSONOrFail(c, &req, "客户端参数不正确") {
@@ -103,6 +122,7 @@ func (h *ClientHandler) create(c *gin.Context) {
 	OK(c, clientSecretResponse{Client: client, ClientSecret: secret})
 }
 
+// update 更新客户端名称和备注信息。
 func (h *ClientHandler) update(c *gin.Context) {
 	id, ok := parseIDParam(c)
 	if !ok {
@@ -129,14 +149,17 @@ func (h *ClientHandler) update(c *gin.Context) {
 	OK(c, client)
 }
 
+// enable 启用指定客户端，使其可以建立隧道连接。
 func (h *ClientHandler) enable(c *gin.Context) {
 	h.setStatus(c, model.ClientStatusEnabled, "client_enable", "enabled client")
 }
 
+// disable 禁用指定客户端，断开其在线连接并阻止新的连接尝试。
 func (h *ClientHandler) disable(c *gin.Context) {
 	h.setStatus(c, model.ClientStatusDisabled, "client_disable", "disabled client")
 }
 
+// rotateSecret 轮换客户端密钥，生成新密钥并返回明文（仅此时可见）。
 func (h *ClientHandler) rotateSecret(c *gin.Context) {
 	id, ok := parseIDParam(c)
 	if !ok {
@@ -156,6 +179,10 @@ func (h *ClientHandler) rotateSecret(c *gin.Context) {
 	OK(c, clientSecretResponse{Client: client, ClientSecret: secret})
 }
 
+// setStatus 通用的客户端状态变更方法，处理启用/禁用并记录审计日志。
+// 参数status：目标状态（enabled/disabled）。
+// 参数action：审计日志操作类型。
+// 参数contentPrefix：审计日志内容前缀。
 func (h *ClientHandler) setStatus(c *gin.Context, status model.ClientStatus, action string, contentPrefix string) {
 	id, ok := parseIDParam(c)
 	if !ok {

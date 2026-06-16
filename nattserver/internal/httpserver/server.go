@@ -1,3 +1,6 @@
+// Package httpserver 提供HTTP服务器的封装。
+// 支持HTTP和HTTPS两种模式，内置优雅关闭和TLS文件校验。
+// 在goroutine中运行监听服务，通过context实现关闭信号传递。
 package httpserver
 
 import (
@@ -12,15 +15,21 @@ import (
 	"nattserver/internal/logger"
 )
 
+// Server HTTP服务器封装，支持HTTP/HTTPS、超时配置和优雅关闭。
 type Server struct {
-	server          *http.Server
-	shutdownTimeout time.Duration
-	log             *logger.Logger
-	httpsEnabled    bool
-	certFile        string
-	keyFile         string
+	server          *http.Server   // 底层HTTP服务器实例
+	shutdownTimeout time.Duration  // 优雅关闭超时时间
+	log             *logger.Logger // 日志记录器
+	httpsEnabled    bool           // 是否启用HTTPS
+	certFile        string         // HTTPS证书文件路径
+	keyFile         string         // HTTPS私钥文件路径
 }
 
+// New 创建HTTP服务器封装实例，配置监听地址、超时和TLS参数。
+// 参数cfg：HTTP配置（地址/端口/超时/HTTPS）。
+// 参数handler：HTTP请求处理器（Gin Engine等）。
+// 参数log：日志记录器。
+// 返回值：初始化好的Server。
 func New(cfg config.HTTPConfig, handler http.Handler, log *logger.Logger) *Server {
 	return &Server{
 		server: &http.Server{
@@ -38,6 +47,7 @@ func New(cfg config.HTTPConfig, handler http.Handler, log *logger.Logger) *Serve
 	}
 }
 
+// Run 启动HTTP服务器，HTTPS模式下先校验证书，在ctx取消时优雅关闭。
 func (s *Server) Run(ctx context.Context) error {
 	if s.httpsEnabled {
 		if err := validateTLSFiles(s.certFile, s.keyFile); err != nil {

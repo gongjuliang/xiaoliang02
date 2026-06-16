@@ -1,3 +1,6 @@
+// Package api 提供HTTP请求日志中间件。
+// 记录每个HTTP请求的方法、路径、状态码、响应时间等信息，
+// 便于问题排查和性能分析。
 package api
 
 import (

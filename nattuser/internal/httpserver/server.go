@@ -1,3 +1,6 @@
+// Package httpserver 提供HTTP服务器的封装。
+// 支持HTTP和HTTPS两种模式，内置优雅关闭和TLS文件校验。
+// 在goroutine中运行监听服务，通过context实现关闭信号传递。
 package httpserver
 
 import (

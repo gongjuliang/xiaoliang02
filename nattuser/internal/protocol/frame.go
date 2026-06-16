@@ -1,3 +1,6 @@
+// Package protocol 定义NATT内网穿透协议的消息格式和帧编码/解码逻辑。
+// 协议采用固定4字节大端长度前缀+JSON消息体的帧格式，
+// 用于控制通道和数据通道的握手通信。绑定成功后数据通道切换为原始TCP代理模式。
 package protocol
 
 import (

@@ -1,3 +1,6 @@
+// Package api 提供Gin的Panic恢复中间件。
+// 捕获处理请求过程中发生的panic，返回500错误响应，
+// 防止单个请求的异常导致整个服务崩溃。
 package api
 
 import (

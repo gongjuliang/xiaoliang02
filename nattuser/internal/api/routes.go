@@ -1,3 +1,6 @@
+// Package api 提供API路由的注册和组织。
+// 使用Gin框架注册所有HTTP API路由，包括认证、前端页面、
+// 服务端连接管理、运维管理和MCP接口等模块的路由分组。
 package api
 
 import (

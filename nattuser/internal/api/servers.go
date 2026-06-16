@@ -1,3 +1,6 @@
+// Package api 提供服务端连接(Tunnel Connection)的Web API处理器。
+// 包含隧道连接的CRUD操作和状态管理（启动/停止），
+// 支持服务端地址、端口、密钥、本地目标等完整配置。
 package api
 
 import (

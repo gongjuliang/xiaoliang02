@@ -1,3 +1,6 @@
+// Package db 提供数据库版本迁移管理功能。
+// 通过schema_migrations表追踪已应用的迁移版本，支持新数据库自动建表、
+// 旧数据库增量升级、旧密码哈希格式重置、旧隧道密钥和客户端密钥哈希迁移。
 package db
 
 import (
@@ -12,12 +15,14 @@ import (
 	"nattserver/internal/logger"
 )
 
+// migration 数据库迁移版本定义结构体。
 type migration struct {
-	Version int
-	Name    string
-	SQL     string
+	Version int    // 迁移版本号
+	Name    string // 迁移名称
+	SQL     string // 迁移SQL语句
 }
 
+// serverMigrations 服务端数据库迁移版本列表（4个版本）。
 var serverMigrations = []migration{
 	{
 		Version: 1,
@@ -252,6 +257,7 @@ END;
 	},
 }
 
+// Migrate 执行数据库迁移：创建schema_migrations表→逐版本应用未执行的迁移→处理旧哈希格式。
 func Migrate(ctx context.Context, database *sql.DB, log *logger.Logger) error {
 	// Migrations are idempotent: schema_migrations records completed versions,
 	// while CREATE IF NOT EXISTS keeps a fresh database and reruns consistent.
@@ -292,6 +298,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 	return nil
 }
 
+// migrationApplied 检查指定版本的迁移是否已执行。
 func migrationApplied(ctx context.Context, database *sql.DB, version int) (bool, error) {
 	var exists int
 	err := database.QueryRowContext(ctx, "SELECT 1 FROM schema_migrations WHERE version = ?", version).Scan(&exists)
@@ -304,6 +311,7 @@ func migrationApplied(ctx context.Context, database *sql.DB, version int) (bool,
 	return true, nil
 }
 
+// applyMigration 在事务中应用单个迁移版本。
 func applyMigration(ctx context.Context, database *sql.DB, item migration) error {
 	tx, err := database.BeginTx(ctx, nil)
 	if err != nil {
@@ -320,6 +328,7 @@ func applyMigration(ctx context.Context, database *sql.DB, item migration) error
 	return tx.Commit()
 }
 
+// resetLegacyPasswordHashes 将旧格式的用户密码哈希升级为当前SM3加盐格式。
 func resetLegacyPasswordHashes(ctx context.Context, database *sql.DB, passwordEnv string, log *logger.Logger) error {
 	rows, err := database.QueryContext(ctx, "SELECT id, password_hash FROM users;")
 	if err != nil {
@@ -367,6 +376,7 @@ func resetLegacyPasswordHashes(ctx context.Context, database *sql.DB, passwordEn
 	return nil
 }
 
+// migrateLegacyTunnelSecretHashes 将旧格式的隧道密钥哈希迁移为当前SM3格式。
 func migrateLegacyTunnelSecretHashes(ctx context.Context, database *sql.DB, log *logger.Logger) error {
 	rows, err := database.QueryContext(ctx, "SELECT id, secret_hash, COALESCE(secret_plain, '') FROM tunnel_keys;")
 	if err != nil {
@@ -432,6 +442,7 @@ WHERE id = ?;`, item.secretHash, item.secretHint, item.id); err != nil {
 	return nil
 }
 
+// disableLegacyClientSecretHashes 禁用使用旧哈希格式的客户端密钥。
 func disableLegacyClientSecretHashes(ctx context.Context, database *sql.DB, log *logger.Logger) error {
 	rows, err := database.QueryContext(ctx, "SELECT id, secret_hash FROM clients;")
 	if err != nil {

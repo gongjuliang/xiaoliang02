@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>小良内网穿透密码重置方法</title>
+    <script src="/static/js/sm3.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+        }
+
+        .container {
+            max-width: 900px;
+            width: 100%;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+            margin-top: 20px;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .warning-banner {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            margin: 20px 30px;
+            border-radius: 4px;
+        }
+
+        .warning-banner strong {
+            color: #856404;
+        }
+
+        .warning-banner p {
+            color: #856404;
+            margin: 5px 0;
+            font-size: 14px;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .section {
+            margin-bottom: 40px;
+        }
+
+        .section:last-child {
+            margin-bottom: 0;
+        }
+
+        .section-title {
+            font-size: 22px;
+            color: #333;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #667eea;
+        }
+
+        .step {
+            background: #f8f9fa;
+            border-left: 4px solid #667eea;
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 4px;
+        }
+
+        .step-number {
+            display: inline-block;
+            width: 28px;
+            height: 28px;
+            background: #667eea;
+            color: white;
+            border-radius: 50%;
+            text-align: center;
+            line-height: 28px;
+            font-weight: bold;
+            margin-right: 10px;
+        }
+
+        .step-title {
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .code-block {
+            background: #2d2d2d;
+            color: #f8f8f2;
+            padding: 15px;
+            border-radius: 6px;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 13px;
+            overflow-x: auto;
+            margin: 10px 0;
+            position: relative;
+        }
+
+        .code-block code {
+            display: block;
+            line-height: 1.6;
+        }
+
+        .copy-btn {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 5px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: background 0.3s;
+        }
+
+        .copy-btn:hover {
+            background: #5568d3;
+        }
+
+        .copy-btn.copied {
+            background: #28a745;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 8px;
+        }
+
+        .form-group input[type="text"],
+        .form-group input[type="password"] {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 6px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            font-weight: 600;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .result-box {
+            background: #e7f3ff;
+            border: 2px solid #667eea;
+            border-radius: 6px;
+            padding: 15px;
+            margin-top: 20px;
+            display: none;
+        }
+
+        .result-box.show {
+            display: block;
+        }
+
+        .result-label {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .result-value {
+            background: white;
+            padding: 12px;
+            border-radius: 4px;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 14px;
+            word-break: break-all;
+            margin-bottom: 10px;
+        }
+
+        .result-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn-small {
+            padding: 8px 16px;
+            font-size: 14px;
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+        }
+
+        .info-box {
+            background: #d1ecf1;
+            border-left: 4px solid #17a2b8;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+
+        .info-box p {
+            color: #0c5460;
+            margin: 5px 0;
+            font-size: 14px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0;
+        }
+
+        table th,
+        table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+
+        table th {
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #333;
+        }
+
+        table td {
+            color: #555;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                border-radius: 0;
+            }
+
+            .header {
+                padding: 20px;
+            }
+
+            .header h1 {
+                font-size: 24px;
+            }
+
+            .content {
+                padding: 20px;
+            }
+
+            .section-title {
+                font-size: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔐 小良内网穿透密码重置方法</h1>
+            <p>用于本地调试和数据恢复的密码管理工具</p>
+        </div>
+
+        <div class="warning-banner">
+            <strong>⚠️ 重要提示</strong>
+            <p>此工具仅用于本地合法调试和数据恢复目的。</p>
+            <p>请确保您有权操作相关数据库，遵守法律法规和项目安全规范。</p>
+        </div>
+
+        <div class="content">
+            <!-- 第一部分：SQLite 数据库操作指南 -->
+            <div class="section">
+                <h2 class="section-title">📋 SQLite 数据库操作指南</h2>
+
+                <div class="step">
+                    <div class="step-title">
+                        <span class="step-number">1</span>
+                        定位数据库文件
+                    </div>
+                    <p style="margin: 10px 0; color: #555;">NATT 项目的 SQLite 数据库文件通常位于以下位置：</p>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>组件</th>
+                                <th>数据库路径</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><strong>nattserver</strong></td>
+                                <td><code>xiaoliang02_server/data/nattserver.db</code></td>
+                            </tr>
+                            <tr>
+                                <td><strong>nattuser</strong></td>
+                                <td><code>xiaoliang02_user/data/nattuser.db</code></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <div class="info-box">
+                        <p>💡 如果找不到数据库文件，请先启动一次 NATT 服务，系统会自动创建数据库。</p>
+                    </div>
+                </div>
+
+                <div class="step">
+                    <div class="step-title">
+                        <span class="step-number">2</span>
+                        打开数据库
+                    </div>
+                    <p style="margin: 10px 0; color: #555;">您可以使用以下工具之一打开 SQLite 数据库：</p>
+                    <ul style="margin: 10px 0 10px 20px; color: #555;">
+                        <li><strong>DB Browser for SQLite</strong>（推荐）：图形化工具，易于使用</li>
+                        <li><strong>sqlite3 命令行工具</strong>：在终端中运行 <code>sqlite3 数据库文件路径</code></li>
+                        <li><strong>VS Code 插件</strong>：SQLite Viewer 或 SQLite Editor</li>
+                    </ul>
+                </div>
+
+                <div class="step">
+                    <div class="step-title">
+                        <span class="step-number">3</span>
+                        查询用户信息
+                    </div>
+                    <p style="margin: 10px 0; color: #555;">执行以下 SQL 语句查看所有用户：</p>
+                    <div class="code-block">
+                        <button class="copy-btn" onclick="copyCode(this)">复制</button>
+                        <code>-- 查询所有用户 <br>
+SELECT id, username, password_hash, role, created_at FROM users;
+</code>
+                    </div>
+                </div>
+
+                <div class="step">
+                    <div class="step-title">
+                        <span class="step-number">4</span>
+                        更新密码哈希
+                    </div>
+                    <p style="margin: 10px 0; color: #555;">使用下方生成的密码哈希值，执行以下 SQL 更新语句：</p>
+                    <div class="code-block">
+                        <button class="copy-btn" onclick="copyCode(this)">复制</button>
+                        <code>-- 更新指定用户的密码（将 '用户名' 替换为真实目标用户名，将 '新生成的哈希值' 替换为实际哈希）<br>
+UPDATE users SET password_hash = '新生成的哈希值' WHERE username = '用户名';
+</code>
+                    </div>
+                    <div class="info-box">
+                        <p>✅ 更新完成后，请使用新密码登录系统验证是否成功。</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 第二部分：密码哈希生成器 -->
+            <div class="section">
+                <h2 class="section-title">🔑 密码哈希生成器</h2>
+
+                <div class="info-box">
+                    <p>ℹ️ <strong>算法说明</strong>：本项目使用 SM3 国密算法 + 8位随机盐值进行密码哈希。</p>
+                    <p>格式：<code>salt$hash</code>（例如：<code>AbCdEfGh$base64编码的SM3哈希值</code>）</p>
+                </div>
+
+                <form id="hashForm">
+                    <div class="form-group">
+                        <label for="password">明文密码</label>
+                        <input type="password" id="password" placeholder="请输入要生成哈希的密码" required>
+                    </div>
+
+
+                    <button type="submit" class="btn">生成密码哈希</button>
+                </form>
+
+                <div id="resultBox" class="result-box">
+                    <div class="result-label">生成的密码哈希值：</div>
+                    <div id="hashValue" class="result-value"></div>
+                    <div class="result-actions">
+                        <button class="btn btn-small btn-success" onclick="copyHash()">复制哈希值</button>
+                        <button class="btn btn-small" onclick="generateSQL()">生成 SQL 语句</button>
+                    </div>
+                </div>
+
+                <div id="sqlBox" class="result-box" style="margin-top: 15px;">
+                    <div class="result-label">SQL 更新语句：</div>
+                    <div class="code-block">
+                        <button class="copy-btn" onclick="copyCode(this)">复制</button>
+                        <code id="sqlValue"></code>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 生成随机盐值
+        function generateSalt(length) {
+            const alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+            let salt = '';
+            const randomValues = new Uint8Array(length);
+            window.crypto.getRandomValues(randomValues);
+            
+            for (let i = 0; i < length; i++) {
+                salt += alphabet[randomValues[i] % alphabet.length];
+            }
+            
+            return salt;
+        }
+
+        // Base64 编码
+        function base64Encode(str) {
+            return btoa(unescape(encodeURIComponent(str)));
+        }
+
+        // SM3 哈希计算（返回二进制数据的Base64编码）
+        function sm3HashToBase64(input) {
+            if (typeof sm3 !== 'undefined') {
+                // sm3() 返回的是16进制字符串，需要转换为二进制再Base64编码
+                const hexString = sm3(input);
+                // 将16进制字符串转换为字节数组
+                const bytes = new Uint8Array(hexString.length / 2);
+                for (let i = 0; i < hexString.length; i += 2) {
+                    bytes[i / 2] = parseInt(hexString.substr(i, 2), 16);
+                }
+                // 将字节数组转换为Base64字符串
+                let binary = '';
+                for (let i = 0; i < bytes.length; i++) {
+                    binary += String.fromCharCode(bytes[i]);
+                }
+                return btoa(binary);
+            } else {
+                alert('SM3 库加载失败，请检查网络连接后刷新页面重试。');
+                throw new Error('SM3 library not loaded');
+            }
+        }
+
+        // 生成密码哈希（与 Go 后端逻辑完全一致）
+        function hashPassword(password) {
+            const salt = generateSalt(8);
+            const combined = salt + password;
+            const encoded = base64Encode(combined);
+            const hash = sm3HashToBase64(encoded);
+            return salt + '$' + hash;
+        }
+
+        // 表单提交处理
+        document.getElementById('hashForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const password = document.getElementById('password').value;
+
+            // 密码不能为空
+            if (password.length === 0) {
+                alert('密码不能为空！');
+                return;
+            }
+
+            // 密码强度校验：至少8位，且必须同时包含字母和数字
+            if (password.length < 8) {
+                alert('密码长度不能少于 8 位！');
+                return;
+            }
+            if (!/[a-zA-Z]/.test(password)) {
+                alert('密码必须包含至少一个字母！');
+                return;
+            }
+            if (!/[0-9]/.test(password)) {
+                alert('密码必须包含至少一个数字！');
+                return;
+            }
+
+            try {
+                const hash = hashPassword(password);
+                
+                document.getElementById('hashValue').textContent = hash;
+                document.getElementById('resultBox').classList.add('show');
+                document.getElementById('sqlBox').classList.remove('show');
+                
+                // 滚动到结果区域
+                document.getElementById('resultBox').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            } catch (error) {
+                console.error('生成哈希失败:', error);
+                alert('生成哈希失败，请查看控制台错误信息。');
+            }
+        });
+
+        // 复制哈希值
+        function copyHash() {
+            const hashValue = document.getElementById('hashValue').textContent;
+            navigator.clipboard.writeText(hashValue).then(() => {
+                const btn = event.target;
+                const originalText = btn.textContent;
+                btn.textContent = '已复制!';
+                setTimeout(() => {
+                    btn.textContent = originalText;
+                }, 2000);
+            }).catch(err => {
+                alert('复制失败，请手动复制');
+                console.error('复制失败:', err);
+            });
+        }
+
+        // 生成 SQL 语句
+        function generateSQL() {
+            const hashValue = document.getElementById('hashValue').textContent;
+            const sql = `UPDATE users SET password_hash = '${hashValue}' WHERE username = '用户名';`;
+            document.getElementById('sqlValue').textContent = sql;
+            document.getElementById('sqlBox').classList.add('show');
+            document.getElementById('sqlBox').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+
+        // 复制代码块
+        function copyCode(btn) {
+            const codeBlock = btn.parentElement.querySelector('code');
+            const text = codeBlock.textContent;
+            
+            navigator.clipboard.writeText(text).then(() => {
+                const originalText = btn.textContent;
+                btn.textContent = '已复制!';
+                btn.classList.add('copied');
+                setTimeout(() => {
+                    btn.textContent = originalText;
+                    btn.classList.remove('copied');
+                }, 2000);
+            }).catch(err => {
+                alert('复制失败，请手动复制');
+                console.error('复制失败:', err);
+            });
+        }
+
+        // 页面加载时检查 SM3 库
+        window.addEventListener('load', function() {
+            if (typeof sm3 === 'undefined') {
+                console.warn('SM3 库未加载，尝试从 CDN 重新加载...');
+                const script = document.createElement('script');
+                script.src = 'https://cdn.jsdelivr.net/npm/sm-crypto@0.3.13/dist/sm3.min.js';
+                script.onload = function() {
+                    console.log('SM3 库加载成功');
+                };
+                script.onerror = function() {
+                    alert('警告：SM3 加密库加载失败，密码生成功能将无法使用。请检查网络连接后刷新页面。');
+                };
+                document.head.appendChild(script);
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,3 +1,6 @@
+// Package api 提供运维管理相关的Web API处理器。
+// 包含本地隧道绑定CRUD、本机连接状态查询、审计日志分页查询、
+// 系统配置查看与热更新、MCP配置管理等功能端点。
 package api
 
 import (

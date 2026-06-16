@@ -54,7 +54,7 @@ func TestInitHandlerCreatesConfigFilesAndDatabase(t *testing.T) {
 		t.Fatalf("init page status=%d body=%s", page.Code, page.Body.String())
 	}
 	assertContainsAll(t, page.Body.String(),
-		"工具人小良-内网穿透客户端",
+		"小良内网穿透-客户端",
 		`data-step="1"`,
 		`data-step="2"`,
 		"下一步",

@@ -1,3 +1,8 @@
+// Package control 提供NATT客户端的核心控制逻辑。
+// 包含控制连接管理器（客户端认证、心跳、命令处理、自动重连）、
+// 数据通道管理（公网→内网数据代理转发）等功能。
+// Manager作为核心控制器，以数据库中的tunnel_connections表为期望状态，
+// 周期性扫描并启动/停止对应的控制连接goroutine，实现自动回连和故障恢复。
 package control
 
 import (
@@ -19,41 +24,54 @@ import (
 	"nattuser/internal/protocol"
 )
 
+// 控制连接管理器的时间常量：定义扫描间隔、重连间隔、拨号超时、心跳间隔等。
 const (
-	defaultScanInterval      = 3 * time.Second
+	// defaultScanInterval 默认数据库扫描间隔：每3秒检查一次期望连接状态。
+	defaultScanInterval = 3 * time.Second
+	// defaultReconnectInterval 默认重连间隔：断线后5秒尝试重连。
 	defaultReconnectInterval = 5 * time.Second
-	defaultDialTimeout       = 10 * time.Second
+	// defaultDialTimeout 默认拨号超时：TCP连接建立超时10秒。
+	defaultDialTimeout = 10 * time.Second
+	// defaultHeartbeatInterval 默认心跳间隔：每15秒发送一次心跳。
 	defaultHeartbeatInterval = 15 * time.Second
-	authTimeout              = 10 * time.Second
-	writeTimeout             = 10 * time.Second
+	// authTimeout 认证超时时间：控制连接建立后10秒内必须完成认证。
+	authTimeout = 10 * time.Second
+	// writeTimeout 写入超时时间：单次协议帧写入超时10秒。
+	writeTimeout = 10 * time.Second
+	// serverTunnelStoppedError 服务端停止隧道时的客户端提示信息。
 	serverTunnelStoppedError = "服务端暂停了隧道连接，请通知服务端人员启动隧道。"
 )
 
+// Options 控制连接管理器的可配置选项，允许调整扫描、重连和心跳等运行参数。
 type Options struct {
-	ScanInterval      time.Duration
-	ReconnectInterval time.Duration
-	DialTimeout       time.Duration
-	HeartbeatInterval time.Duration
+	ScanInterval      time.Duration // 数据库扫描间隔（≤0使用默认3秒）
+	ReconnectInterval time.Duration // 重连间隔（≤0使用默认5秒）
+	DialTimeout       time.Duration // 拨号超时（≤0使用默认10秒）
+	HeartbeatInterval time.Duration // 心跳间隔（≤0使用默认15秒）
 }
 
+// Manager 控制连接管理器，管理所有到服务端的控制连接和数据通道。
+// 以数据库为期望状态源，周期性同步活跃连接。线程安全。
 type Manager struct {
-	cfg      *config.Config
-	database *sql.DB
-	log      *logger.Logger
-	options  Options
+	cfg      *config.Config // 客户端配置
+	database *sql.DB        // 数据库连接
+	log      *logger.Logger // 日志记录器
+	options  Options        // 运行时选项
 
-	mu      sync.Mutex
-	active  map[int64]*activeConnection
-	dataMu  sync.Mutex
-	data    map[string]*activeDataConnection
-	workers sync.WaitGroup
+	mu      sync.Mutex                       // 保护active map的互斥锁
+	active  map[int64]*activeConnection      // 活跃控制连接映射：tunnel_connection ID → activeConnection
+	dataMu  sync.Mutex                       // 保护data map的互斥锁
+	data    map[string]*activeDataConnection // 活跃数据连接映射：connectionID → activeDataConnection
+	workers sync.WaitGroup                   // 等待所有工作协程完成的计数器
 }
 
+// activeConnection 活跃控制连接封装，包含连接ID和取消函数。
 type activeConnection struct {
-	id     int64
-	cancel context.CancelFunc
+	id     int64              // 隧道连接ID
+	cancel context.CancelFunc // 取消该连接所有协程的函数
 }
 
+// NewManager 创建控制连接管理器实例（使用默认选项）。
 func NewManager(cfg *config.Config, database *sql.DB, log *logger.Logger) *Manager {
 	return NewManagerWithOptions(cfg, database, log, Options{})
 }

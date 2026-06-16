@@ -1,3 +1,6 @@
+// Package api 提供运维管理相关的Web API处理器。
+// 包含仪表盘数据汇总、审计日志分页查询、系统配置查看与热更新、
+// MCP配置管理（启停、Token查看、Token轮换）等功能端点。
 package api
 
 import (
@@ -16,23 +19,27 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// OpsHandler 运维管理API处理器，提供仪表盘、审计日志、配置管理和MCP配置等功能端点。
 type OpsHandler struct {
-	database *sql.DB
-	log      *logger.Logger
-	cfg      *config.Config
+	database *sql.DB        // 数据库连接
+	log      *logger.Logger // 日志记录器
+	cfg      *config.Config // 应用配置（支持热更新）
 }
 
+// updateConfigRequest 配置更新请求参数，键值对形式提交。
 type updateConfigRequest struct {
-	Settings map[string]string `json:"settings" binding:"required"`
+	Settings map[string]string `json:"settings" binding:"required"` // 配置键值对
 }
 
+// configUpdateResult 单个配置项的更新结果。
 type configUpdateResult struct {
-	Key             string `json:"key"`
-	Value           string `json:"value"`
-	HotReloaded     bool   `json:"hot_reloaded"`
-	RestartRequired bool   `json:"restart_required"`
+	Key             string `json:"key"`              // 配置键名
+	Value           string `json:"value"`            // 最终生效的值
+	HotReloaded     bool   `json:"hot_reloaded"`     // 是否已热加载
+	RestartRequired bool   `json:"restart_required"` // 是否需要重启
 }
 
+// NewOpsHandler 创建运维管理API处理器。
 func NewOpsHandler(database *sql.DB, log *logger.Logger, cfg *config.Config) *OpsHandler {
 	return &OpsHandler{
 		database: database,
@@ -41,6 +48,7 @@ func NewOpsHandler(database *sql.DB, log *logger.Logger, cfg *config.Config) *Op
 	}
 }
 
+// RegisterRoutes 注册运维管理的REST端点：仪表盘/审计日志/配置查看与更新/MCP配置管理。
 func (h *OpsHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.GET("/dashboard", h.dashboard)
 	group.GET("/audit-logs", h.auditLogs)
@@ -52,6 +60,7 @@ func (h *OpsHandler) RegisterRoutes(group *gin.RouterGroup) {
 	group.POST("/mcp-config/rotate-token", h.rotateMCPToken)
 }
 
+// dashboard 获取仪表盘数据：在线客户端/隧道数、流量统计等汇总指标。
 func (h *OpsHandler) dashboard(c *gin.Context) {
 	summary, err := db.GetDashboardSummary(c.Request.Context(), h.database)
 	if err != nil {
@@ -61,6 +70,7 @@ func (h *OpsHandler) dashboard(c *gin.Context) {
 	OK(c, summary)
 }
 
+// auditLogs 分页查询审计日志（从logs/audit/YYYY-MM-DD.jsonl文件读取）。
 func (h *OpsHandler) auditLogs(c *gin.Context) {
 	var page PageRequest
 	if err := c.ShouldBindQuery(&page); err != nil {
@@ -76,6 +86,7 @@ func (h *OpsHandler) auditLogs(c *gin.Context) {
 	OK(c, NewPageResponse(logs, total, page))
 }
 
+// getConfig 返回当前全部配置（含可编辑键列表），JWT密钥等敏感字段不暴露。
 func (h *OpsHandler) getConfig(c *gin.Context) {
 	settings, err := db.ListSettings(c.Request.Context(), h.database)
 	if err != nil {
@@ -119,6 +130,7 @@ func (h *OpsHandler) getConfig(c *gin.Context) {
 	})
 }
 
+// updateConfig 批量更新配置项（仅允许热更新键），写入审计日志。
 func (h *OpsHandler) updateConfig(c *gin.Context) {
 	var req updateConfigRequest
 	if !bindJSONOrFail(c, &req, "settings 为必填项") {
@@ -149,6 +161,7 @@ func (h *OpsHandler) updateConfig(c *gin.Context) {
 	OK(c, gin.H{"updated": results})
 }
 
+// applyConfigSetting 应用单个配置项的热更新（log.level/tunnel端口范围等），不可热更新键返回错误。
 func (h *OpsHandler) applyConfigSetting(key string, value string) (configUpdateResult, error) {
 	switch key {
 	case "log.level":
@@ -190,6 +203,7 @@ func (h *OpsHandler) applyConfigSetting(key string, value string) (configUpdateR
 	}
 }
 
+// writeError 记录错误日志并返回500 Internal Server Error响应。
 func (h *OpsHandler) writeError(c *gin.Context, err error, fallback string) {
 	if h.log != nil {
 		h.log.Errorf("%s: %v", fallback, err)
@@ -197,6 +211,7 @@ func (h *OpsHandler) writeError(c *gin.Context, err error, fallback string) {
 	Fail(c, http.StatusInternalServerError, CodeInternalError, fallback)
 }
 
+// editableConfigKeys 返回允许在Web界面热更新的配置键列表。
 func editableConfigKeys() []gin.H {
 	return []gin.H{
 		{"key": "log.level", "hot_reload": true},
@@ -205,6 +220,7 @@ func editableConfigKeys() []gin.H {
 	}
 }
 
+// parsePortValue 解析端口配置值，allowZero时最小值可为0。
 func parsePortValue(key string, value string, allowZero bool) (int, error) {
 	port, err := strconv.Atoi(value)
 	min := 1
@@ -220,6 +236,7 @@ func parsePortValue(key string, value string, allowZero bool) (int, error) {
 	return port, nil
 }
 
+// validateRestartSetting 验证需重启生效的配置值格式是否正确。
 func validateRestartSetting(key string, value string) error {
 	switch key {
 	case "http.port", "protocol.control_port", "protocol.data_port":
@@ -234,11 +251,13 @@ func validateRestartSetting(key string, value string) error {
 	return nil
 }
 
+// mcpConfigRequest MCP配置请求参数。
 type mcpConfigRequest struct {
 	Enabled     bool   `json:"enabled"`
 	AccessToken string `json:"access_token"`
 }
 
+// getMCPConfig 获取MCP启用状态和Token摘要（不返回完整Token明文）。
 func (h *OpsHandler) getMCPConfig(c *gin.Context) {
 	enabledValue, err := db.GetSetting(c.Request.Context(), h.database, "mcp.enabled")
 	if err != nil && !errors.Is(err, db.ErrNotFound) {
@@ -258,6 +277,7 @@ func (h *OpsHandler) getMCPConfig(c *gin.Context) {
 	})
 }
 
+// updateMCPConfig 更新MCP启用/禁用状态，Key由系统生成不允许前端自定义。
 func (h *OpsHandler) updateMCPConfig(c *gin.Context) {
 	var req mcpConfigRequest
 	if !bindJSONOrFail(c, &req, "MCP 配置参数不正确") {
@@ -279,6 +299,7 @@ func (h *OpsHandler) updateMCPConfig(c *gin.Context) {
 	OK(c, gin.H{"enabled": req.Enabled, "access_token_hint": auth.SecretHint(token), "has_access_token": token != ""})
 }
 
+// revealMCPToken 查看MCP Key明文（写入审计日志以追踪敏感操作）。
 func (h *OpsHandler) revealMCPToken(c *gin.Context) {
 	token, err := db.GetSetting(c.Request.Context(), h.database, "mcp.access_token")
 	if errors.Is(err, db.ErrNotFound) || strings.TrimSpace(token) == "" {
@@ -293,6 +314,7 @@ func (h *OpsHandler) revealMCPToken(c *gin.Context) {
 	OK(c, gin.H{"access_token": token, "access_token_hint": auth.SecretHint(token)})
 }
 
+// rotateMCPToken 重置MCP Key为新的随机值，旧Key立即失效。
 func (h *OpsHandler) rotateMCPToken(c *gin.Context) {
 	token, err := auth.GenerateClientSecret()
 	if err != nil {
@@ -307,6 +329,7 @@ func (h *OpsHandler) rotateMCPToken(c *gin.Context) {
 	OK(c, gin.H{"access_token": token, "access_token_hint": auth.SecretHint(token)})
 }
 
+// ensureMCPToken 确保MCP启用时存在Token，不存在则自动生成。
 func (h *OpsHandler) ensureMCPToken(c *gin.Context, enabled bool) (string, bool) {
 	existing, err := db.GetSetting(c.Request.Context(), h.database, "mcp.access_token")
 	if err != nil && !errors.Is(err, db.ErrNotFound) {

@@ -1,3 +1,6 @@
+// Package api 提供认证相关的Web API处理器。
+// 包含SM2公钥获取、图片验证码、用户登录（SM2加密密码验证+JWT签发）、
+// Token刷新和当前用户信息查询等完整的认证流程端点。
 package api
 
 import (

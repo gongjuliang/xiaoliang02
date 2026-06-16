@@ -29,7 +29,7 @@ import (
 	"nattuser/internal/model"
 )
 
-const clientBrandName = "工具人小良-内网穿透客户端"
+const clientBrandName = "小良内网穿透-客户端"
 
 type initRequest struct {
 	HTTPHost        string `json:"http_host"`

@@ -1,3 +1,6 @@
+// Package db 提供服务端连接(ServerConnection)的数据库CRUD操作。
+// 隧道连接(tunnel_connections)表存储客户端到nattserver的连接配置，
+// 包含服务端地址/端口、密钥、本地目标、连接状态等完整信息。
 package db
 
 import (

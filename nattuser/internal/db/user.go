@@ -1,3 +1,5 @@
+// Package db 提供用户(User)相关的数据库CRUD操作。
+// 包括用户查询（按用户名/ID）、创建用户和用户计数等功能。
 package db
 
 import (

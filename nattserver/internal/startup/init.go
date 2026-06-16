@@ -1,3 +1,6 @@
+// Package startup 提供NATT服务端首次启动的初始化向导功能。
+// 包含两步向导（运行配置→管理员账号）、自签名证书生成、
+// SM2密钥生成、数据库初始化、配置文件写入等完整的首次部署流程。
 package startup
 
 import (
@@ -29,8 +32,10 @@ import (
 	"nattserver/internal/model"
 )
 
-const serverBrandName = "工具人小良-内网穿透服务端"
+// serverBrandName 服务端品牌名称，用于初始化页面标题和测试证书主题。
+const serverBrandName = "小良内网穿透-服务端"
 
+// initRequest 初始化请求结构体，接收前端初始化向导提交的配置数据。
 type initRequest struct {
 	HTTPHost        string `json:"http_host"`
 	HTTPPort        int    `json:"http_port"`
@@ -53,6 +58,11 @@ type initRequest struct {
 	WebHTTPSKeyPEM  string `json:"web_https_key_pem"`
 }
 
+// NewInitHandler 创建初始化向导的HTTP处理器。
+// 提供初始化页面渲染、静态资源服务、初始化状态查询和配置提交通道。
+// 参数defaultCfg：默认配置（作为页面默认值展示）。
+// 参数done：配置完成通知通道，初始化成功后通过此通道传回新配置。
+// 返回值：HTTP处理器。
 func NewInitHandler(defaultCfg *config.Config, done chan<- *config.Config) http.Handler {
 	mux := http.NewServeMux()
 	tmpl := template.Must(template.New("").ParseFS(embedfiles.WebFs, "Templates/init.html", "Templates/agreement.html"))
@@ -105,6 +115,7 @@ func NewInitHandler(defaultCfg *config.Config, done chan<- *config.Config) http.
 	return mux
 }
 
+// initPageData 初始化页面模板数据，用于渲染HTML初始化向导页面。
 type initPageData struct {
 	BrandName    string
 	Environment  string
@@ -120,6 +131,7 @@ type initPageData struct {
 	KeyFile      string
 }
 
+// newInitPageData 从配置构建初始化页面模板数据。
 func newInitPageData(cfg *config.Config) initPageData {
 	if cfg == nil {
 		cfg = config.Default()
