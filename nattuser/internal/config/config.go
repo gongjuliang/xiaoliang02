@@ -23,6 +23,7 @@ import (
 const (
 	// RuntimeRoot 客户端运行时文件根目录，所有相对路径都基于此目录。
 	RuntimeRoot = "xiaoliang02_user"
+	Version     = "v0.1"
 )
 
 var (

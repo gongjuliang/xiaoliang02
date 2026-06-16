@@ -16,6 +16,7 @@ import (
 const (
 	// RuntimeRoot 服务端运行时文件根目录，所有相对路径都基于此目录。
 	RuntimeRoot = "xiaoliang02_server"
+	Version     = "v0.1"
 )
 
 var (

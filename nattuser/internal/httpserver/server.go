@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"time"
@@ -54,7 +55,14 @@ func (s *Server) Run(ctx context.Context) error {
 			if s.httpsEnabled {
 				scheme = "https"
 			}
-			s.log.Infof("%s server listening on %s", scheme, s.server.Addr)
+			_, port, err := net.SplitHostPort(s.server.Addr)
+			if err == nil {
+				s.log.Infof("============================================================")
+				s.log.Infof("小良内网穿透-客户端 管理后台网址:%s://127.0.0.1:%s", scheme, port)
+				s.log.Infof("============================================================")
+			}
+			s.log.Infof("小良内网穿透-客户端 %s 服务 正在监听 %s", scheme, s.server.Addr)
+
 		}
 		var err error
 		if s.httpsEnabled {
@@ -74,7 +82,7 @@ func (s *Server) Run(ctx context.Context) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), s.shutdownTimeout)
 		defer cancel()
 		if s.log != nil {
-			s.log.Infof("http server shutting down")
+			s.log.Infof("http 服务已关闭")
 		}
 		return s.server.Shutdown(shutdownCtx)
 	case err := <-errCh:

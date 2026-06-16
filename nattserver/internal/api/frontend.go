@@ -6,6 +6,8 @@ package api
 import (
 	// html/template 提供HTML模板解析和执行功能。
 	"html/template"
+	"nattserver/internal/config"
+
 	// io/fs 提供文件系统接口，用于从嵌入式文件系统提取子目录。
 	"io/fs"
 	// net/http 提供HTTP状态码和文件服务功能。
@@ -41,11 +43,15 @@ func registerFrontendRoutes(router *gin.Engine) {
 		c.HTML(http.StatusOK, "index.html", nil)
 	})
 	router.GET("/index.html", func(c *gin.Context) {
-		c.HTML(http.StatusOK, "index.html", nil)
+		c.HTML(http.StatusOK, "index.html", gin.H{ // 使用index.tmpl模板，并传递一些数据给模板
+			"version": config.Version,
+		})
 	})
 	// 登录页面路由
 	router.GET("/login.html", func(c *gin.Context) {
-		c.HTML(http.StatusOK, "login.html", nil)
+		c.HTML(http.StatusOK, "login.html", gin.H{ // 使用index.tmpl模板，并传递一些数据给模板
+			"version": config.Version,
+		})
 	})
 	// 用户协议页面路由
 	router.GET("/agreement.html", func(c *gin.Context) {

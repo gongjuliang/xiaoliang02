@@ -6,6 +6,7 @@ package api
 import (
 	"html/template"
 	"io/fs"
+	"nattuser/internal/config"
 	"net/http"
 
 	embedfiles "nattuser/Web/EmbedFiles"
@@ -26,10 +27,14 @@ func registerFrontendRoutes(router *gin.Engine) {
 		c.HTML(http.StatusOK, "index.html", nil)
 	})
 	router.GET("/index.html", func(c *gin.Context) {
-		c.HTML(http.StatusOK, "index.html", nil)
+		c.HTML(http.StatusOK, "index.html", gin.H{ // 使用index.tmpl模板，并传递一些数据给模板
+			"version": config.Version,
+		})
 	})
 	router.GET("/login.html", func(c *gin.Context) {
-		c.HTML(http.StatusOK, "login.html", nil)
+		c.HTML(http.StatusOK, "login.html", gin.H{ // 使用index.tmpl模板，并传递一些数据给模板
+			"version": config.Version,
+		})
 	})
 	router.GET("/agreement.html", func(c *gin.Context) {
 		c.HTML(http.StatusOK, "agreement.html", nil)
