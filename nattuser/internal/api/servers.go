@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -155,19 +156,19 @@ func (h *ServerHandler) delete(c *gin.Context) {
 }
 
 func (h *ServerHandler) start(c *gin.Context) {
-	h.setStatus(c, model.ServerConnectionStatusConnected, "server_start", "connected server")
+	h.setManualConnectionState(c, db.MarkServerConnectionManualStart, "server_start", "connected server")
 }
 
 func (h *ServerHandler) stop(c *gin.Context) {
-	h.setStatus(c, model.ServerConnectionStatusStopped, "server_stop", "stopped server")
+	h.setManualConnectionState(c, db.MarkServerConnectionManualStop, "server_stop", "stopped server")
 }
 
-func (h *ServerHandler) setStatus(c *gin.Context, status model.ServerConnectionStatus, action string, contentPrefix string) {
+func (h *ServerHandler) setManualConnectionState(c *gin.Context, updateFn func(context.Context, *sql.DB, int64) (model.ServerConnection, error), action string, contentPrefix string) {
 	id, ok := parseIDParam(c)
 	if !ok {
 		return
 	}
-	connection, err := db.SetServerConnectionStatus(c.Request.Context(), h.database, id, status, "")
+	connection, err := updateFn(c.Request.Context(), h.database, id)
 	if err != nil {
 		h.writeDBError(c, err, "set server connection status failed")
 		return

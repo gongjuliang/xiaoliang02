@@ -77,7 +77,10 @@ type Heartbeat struct {
 }
 
 type HeartbeatAck struct {
-	ServerTime int64 `json:"server_time"`
+	ServerTime   int64  `json:"server_time"`
+	TunnelStatus string `json:"tunnel_status,omitempty"`
+	LastError    string `json:"last_error,omitempty"`
+	RemotePort   int    `json:"remote_port,omitempty"`
 }
 
 type DataOpen struct {

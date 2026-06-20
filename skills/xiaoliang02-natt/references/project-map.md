@@ -51,6 +51,10 @@ D:\2025Code\ai\natt
 - Server owns public listener fields: remote host, remote port, status, auto start, secret, traffic.
 - Client owns local target fields: server host, control port, data port, server tunnel secret, local host, local port.
 - One server tunnel ID may be occupied by only one active client connection at a time.
+- Starting a server tunnel while its client is offline should move it to `waiting`, set `auto_start=true`, clear `last_error`, and avoid binding the public port until reconnect.
+- If a running tunnel loses its control connection, the server writes `last_error=隧道控制连接已离线`; only this error is automatically recovered when the same client reconnects or sends heartbeat.
+- `heartbeat_ack` carries `tunnel_status`, `last_error`, and `remote_port`; the client uses it as a fallback to sync server `stopped`/`error` when it misses a command.
+- Client Web/MCP “disconnect” is user intent: it sets the connection to `stopped`, clears `last_error`, and disables `auto_start`; Web/MCP “connect” enables `auto_start` again.
 - If the server tunnel is stopped, the client status detail must be:
 
 ```text

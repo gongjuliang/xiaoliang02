@@ -369,7 +369,7 @@ func (m *Manager) readLoop(ctx context.Context, connectionID int64, conn net.Con
 func (m *Manager) handleMessage(ctx context.Context, connectionID int64, writer *controlWriter, message protocol.Message) error {
 	switch message.Type {
 	case protocol.TypeHeartbeatAck:
-		return db.MarkServerConnectionHeartbeat(ctx, m.database, connectionID)
+		return m.handleHeartbeatAck(ctx, connectionID, message)
 	case protocol.TypeDataOpen:
 		dataOpen, err := protocol.DecodePayload[protocol.DataOpen](message)
 		if err != nil {
@@ -403,6 +403,33 @@ func (m *Manager) handleMessage(ctx context.Context, connectionID int64, writer 
 		m.logInfo("ignored unsupported control message server_connection_id=%d type=%s", connectionID, message.Type)
 		return nil
 	}
+}
+
+func (m *Manager) handleHeartbeatAck(ctx context.Context, connectionID int64, message protocol.Message) error {
+	ack, err := protocol.DecodePayload[protocol.HeartbeatAck](message)
+	if err != nil {
+		return err
+	}
+	switch strings.TrimSpace(ack.TunnelStatus) {
+	case "stopped":
+		if err := db.MarkServerConnectionError(ctx, m.database, connectionID, serverTunnelStoppedError); err != nil {
+			return err
+		}
+		m.closeDataConnectionsForServer(connectionID)
+		return nil
+	case "error":
+		if strings.TrimSpace(ack.LastError) != "" {
+			if err := db.MarkServerConnectionError(ctx, m.database, connectionID, ack.LastError); err != nil {
+				return err
+			}
+			m.closeDataConnectionsForServer(connectionID)
+			return nil
+		}
+	}
+	if ack.RemotePort > 0 {
+		return db.MarkServerConnectionConnectedWithRemotePort(ctx, m.database, connectionID, ack.RemotePort)
+	}
+	return db.MarkServerConnectionHeartbeat(ctx, m.database, connectionID)
 }
 
 func localizeProtocolError(err protocol.ProtocolError) string {

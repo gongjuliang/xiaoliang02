@@ -251,9 +251,9 @@ func (h *clientHandler) executeTool(ctx context.Context, tool string, raw json.R
 	case "client.delete_tunnel_connection":
 		return h.deleteTunnelConnection(ctx, raw)
 	case "client.connect_tunnel", "client.connect_server":
-		return h.setServerStatus(ctx, raw, model.ServerConnectionStatusConnected, "mcp_server_connect", "mcp connected server")
+		return h.setServerManualState(ctx, raw, db.MarkServerConnectionManualStart, "mcp_server_connect", "mcp connected server")
 	case "client.disconnect_tunnel", "client.disconnect_server":
-		return h.setServerStatus(ctx, raw, model.ServerConnectionStatusStopped, "mcp_server_disconnect", "mcp disconnected server")
+		return h.setServerManualState(ctx, raw, db.MarkServerConnectionManualStop, "mcp_server_disconnect", "mcp disconnected server")
 	case "client.list_tunnels":
 		return h.listTunnels(ctx, raw)
 	case "client.get_network_status":
@@ -350,7 +350,7 @@ func (h *clientHandler) validateCreateTunnelConnectionParams(params *createTunne
 	}
 }
 
-func (h *clientHandler) setServerStatus(ctx context.Context, raw json.RawMessage, status model.ServerConnectionStatus, action string, contentPrefix string) (any, error) {
+func (h *clientHandler) setServerManualState(ctx context.Context, raw json.RawMessage, updateFn func(context.Context, *sql.DB, int64) (model.ServerConnection, error), action string, contentPrefix string) (any, error) {
 	var params idParams
 	if err := bindParams(raw, &params); err != nil {
 		return nil, err
@@ -358,7 +358,7 @@ func (h *clientHandler) setServerStatus(ctx context.Context, raw json.RawMessage
 	if params.ID <= 0 {
 		return nil, fmt.Errorf("id is required")
 	}
-	connection, err := db.SetServerConnectionStatus(ctx, h.database, params.ID, status, "")
+	connection, err := updateFn(ctx, h.database, params.ID)
 	if err != nil {
 		return nil, translateDBError(err, "set server connection status failed")
 	}

@@ -81,6 +81,9 @@ func (s *Server) StartTunnel(ctx context.Context, id int64) (model.Tunnel, error
 		return db.SetTunnelStatus(ctx, s.database, tunnel.ID, model.TunnelStatusRunning, "")
 	}
 	s.tunnelMu.Unlock()
+	if !s.hasActiveClient(tunnel.ID) {
+		return db.SetTunnelWaiting(ctx, s.database, tunnel.ID)
+	}
 
 	listener, err := net.Listen("tcp", net.JoinHostPort(hostOrDefault(tunnel.RemoteHost), strconv.Itoa(tunnel.RemotePort)))
 	if err != nil {
@@ -102,7 +105,8 @@ func (s *Server) StartTunnel(ctx context.Context, id int64) (model.Tunnel, error
 	}
 	if err := s.SendToClient(tunnel.ID, startCommand); err != nil {
 		_ = listener.Close()
-		return s.markTunnelError(ctx, tunnel.ID, err)
+		s.closeActiveClient(tunnel.ID)
+		return db.SetTunnelWaiting(ctx, s.database, tunnel.ID)
 	}
 
 	s.tunnelMu.Lock()

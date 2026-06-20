@@ -16,6 +16,7 @@ import (
 	"nattserver/internal/config"
 	"nattserver/internal/db"
 	"nattserver/internal/logger"
+	"nattserver/internal/model"
 	"nattserver/internal/protocol"
 )
 
@@ -28,6 +29,9 @@ const (
 
 // tunnelStoppedByServerMessage 服务端主动停止隧道时发送给客户端的提示信息。
 const tunnelStoppedByServerMessage = "服务端暂停了隧道连接，请通知服务端人员启动隧道。"
+
+// controlOfflineMessage 是控制连接异常离线时写入状态详情的可恢复错误。
+const controlOfflineMessage = "隧道控制连接已离线"
 
 // Server 控制通道服务器，管理服务端所有客户端连接、隧道和数据通道。
 // 内部维护三个并发安全的Map：active（在线客户端）、tunnels（活跃隧道）、pending（待绑定数据连接）。
@@ -201,6 +205,31 @@ func (s *Server) SendToClient(tunnelID int64, message protocol.Message) error {
 	return client.write(message)
 }
 
+// hasActiveClient 判断指定隧道是否已有在线控制连接。
+func (s *Server) hasActiveClient(tunnelID int64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.active[tunnelID] != nil
+}
+
+// closeActiveClient 关闭并移除指定隧道当前的控制连接。
+func (s *Server) closeActiveClient(tunnelID int64) {
+	s.mu.Lock()
+	client := s.active[tunnelID]
+	if client != nil {
+		delete(s.active, tunnelID)
+	}
+	s.mu.Unlock()
+	if client != nil {
+		_ = client.conn.Close()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := db.MarkTunnelKeyOffline(ctx, s.database, tunnelID); err != nil {
+		s.logError("mark tunnel offline after closing active client failed tunnel_id=%d: %v", tunnelID, err)
+	}
+}
+
 // DisconnectTunnel 断开指定隧道的客户端控制连接。
 // 从活跃连接表中移除客户端、关闭TCP连接、停止隧道运行时、
 // 并更新数据库中隧道密钥的离线状态和隧道不可用状态。
@@ -303,7 +332,9 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 		s.logError("mark tunnel online failed tunnel_id=%d: %v", key.TunnelID, err)
 	}
 	_ = writeWithDeadline(conn, authResponse(first.RequestID, true, clientID, key.TunnelID, remotePort, "ok"))
-	s.startTunnelIfAutoStart(ctx, key.TunnelID)
+	if !s.recoverControlOfflineTunnel(ctx, key.TunnelID) {
+		s.startTunnelIfAutoStart(ctx, key.TunnelID)
+	}
 
 	_ = conn.SetDeadline(time.Time{})
 	if s.log != nil {
@@ -352,7 +383,8 @@ func (s *Server) handleMessage(ctx context.Context, client *clientConn, message 
 		if err := db.MarkTunnelKeyHeartbeat(ctx, s.database, client.tunnelID); err != nil {
 			return err
 		}
-		ack, err := protocol.NewMessage(protocol.TypeHeartbeatAck, 0, client.tunnelID, "", protocol.HeartbeatAck{ServerTime: time.Now().Unix()})
+		s.recoverControlOfflineTunnel(ctx, client.tunnelID)
+		ack, err := protocol.NewMessage(protocol.TypeHeartbeatAck, 0, client.tunnelID, "", s.heartbeatAckPayload(ctx, client.tunnelID))
 		if err != nil {
 			return err
 		}
@@ -374,6 +406,20 @@ func (s *Server) handleMessage(ctx context.Context, client *clientConn, message 
 	default:
 		return fmt.Errorf("不支持的消息类型：%s", message.Type)
 	}
+}
+
+// heartbeatAckPayload 构造心跳响应，尽量携带服务端当前隧道状态供客户端兜底同步。
+func (s *Server) heartbeatAckPayload(ctx context.Context, tunnelID int64) protocol.HeartbeatAck {
+	ack := protocol.HeartbeatAck{ServerTime: time.Now().Unix()}
+	tunnel, err := db.GetTunnelByID(ctx, s.database, tunnelID)
+	if err != nil {
+		s.logError("load tunnel for heartbeat ack failed tunnel_id=%d: %v", tunnelID, err)
+		return ack
+	}
+	ack.TunnelStatus = string(tunnel.Status)
+	ack.LastError = tunnel.LastError
+	ack.RemotePort = tunnel.RemotePort
+	return ack
 }
 
 // register 将客户端连接注册到活跃连接表中。
@@ -411,10 +457,27 @@ func (s *Server) unregister(tunnelID int64, client *clientConn) {
 	if err := db.MarkTunnelKeyOffline(ctx, s.database, tunnelID); err != nil {
 		s.logError("mark tunnel offline failed tunnel_id=%d: %v", tunnelID, err)
 	}
-	if err := db.MarkTunnelUnavailable(ctx, s.database, tunnelID, "隧道控制连接已离线"); err != nil {
+	if err := db.MarkTunnelUnavailable(ctx, s.database, tunnelID, controlOfflineMessage); err != nil {
 		s.logError("mark tunnel unavailable failed tunnel_id=%d: %v", tunnelID, err)
 	}
 	s.stopTunnelRuntime(tunnelID)
+}
+
+// recoverControlOfflineTunnel 只恢复“控制连接已离线”这一类可恢复错误。
+// 端口占用、配置错误、秘钥错误等错误需要人工处理，不能在心跳里自动清除。
+func (s *Server) recoverControlOfflineTunnel(ctx context.Context, tunnelID int64) bool {
+	tunnel, err := db.GetTunnelByID(ctx, s.database, tunnelID)
+	if err != nil {
+		s.logError("load tunnel for offline recovery failed tunnel_id=%d: %v", tunnelID, err)
+		return false
+	}
+	if tunnel.Status != model.TunnelStatusError || strings.TrimSpace(tunnel.LastError) != controlOfflineMessage {
+		return false
+	}
+	if _, err := s.StartTunnel(ctx, tunnel.ID); err != nil {
+		s.logError("recover offline tunnel failed tunnel_id=%d: %v", tunnel.ID, err)
+	}
+	return true
 }
 
 // startTunnelIfAutoStart 检查隧道是否配置了自动启动，如果是则立即启动隧道。
@@ -427,7 +490,7 @@ func (s *Server) startTunnelIfAutoStart(ctx context.Context, tunnelID int64) {
 		s.logError("load auto-start tunnel failed tunnel_id=%d: %v", tunnelID, err)
 		return
 	}
-	if tunnel.AutoStart {
+	if tunnel.AutoStart && tunnel.Status != model.TunnelStatusError {
 		if _, err := s.StartTunnel(ctx, tunnel.ID); err != nil {
 			s.logError("start auto-start tunnel failed tunnel_id=%d: %v", tunnel.ID, err)
 		}

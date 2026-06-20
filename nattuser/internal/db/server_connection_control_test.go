@@ -138,3 +138,43 @@ func TestControlStatusMarkersUpdateServerConnectionState(t *testing.T) {
 		t.Fatalf("after stopped: %+v", connection)
 	}
 }
+
+func TestManualServerConnectionStartStopTogglesAutoStart(t *testing.T) {
+	ctx := context.Background()
+	database, err := Open(ctx, filepath.Join(t.TempDir(), "test.db"), nil)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer database.Close()
+
+	connection, err := CreateServerConnection(ctx, database, CreateServerConnectionParams{
+		Name:         "manual-toggle",
+		ServerHost:   "127.0.0.1",
+		ServerPort:   7000,
+		DataPort:     7001,
+		ClientSecret: "secret",
+		AutoStart:    true,
+	})
+	if err != nil {
+		t.Fatalf("create connection: %v", err)
+	}
+	if err := MarkServerConnectionError(ctx, database, connection.ID, "temporary error"); err != nil {
+		t.Fatalf("mark error: %v", err)
+	}
+
+	stopped, err := MarkServerConnectionManualStop(ctx, database, connection.ID)
+	if err != nil {
+		t.Fatalf("manual stop: %v", err)
+	}
+	if stopped.Status != model.ServerConnectionStatusStopped || stopped.AutoStart || stopped.LastError != "" {
+		t.Fatalf("manual stop connection=%+v want stopped auto_start=false last_error empty", stopped)
+	}
+
+	started, err := MarkServerConnectionManualStart(ctx, database, connection.ID)
+	if err != nil {
+		t.Fatalf("manual start: %v", err)
+	}
+	if started.Status != model.ServerConnectionStatusConnected || !started.AutoStart || started.LastError != "" {
+		t.Fatalf("manual start connection=%+v want connected auto_start=true last_error empty", started)
+	}
+}

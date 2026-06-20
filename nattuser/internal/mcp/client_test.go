@@ -198,6 +198,9 @@ func TestClientMCPConnectsDisconnectsAndWritesAuditLogs(t *testing.T) {
 	if connected.Status != model.ServerConnectionStatusConnected {
 		t.Fatalf("status=%s want=%s", connected.Status, model.ServerConnectionStatusConnected)
 	}
+	if !connected.AutoStart {
+		t.Fatalf("connect should enable auto_start: %+v", connected)
+	}
 
 	rec = callClientMCP(t, router, "client-mcp-token", "client.disconnect_server", map[string]any{"id": 1})
 	if rec.Code != http.StatusOK {
@@ -207,6 +210,9 @@ func TestClientMCPConnectsDisconnectsAndWritesAuditLogs(t *testing.T) {
 	decodeMCPToolStructured(t, rec, &stopped)
 	if stopped.Status != model.ServerConnectionStatusStopped {
 		t.Fatalf("status=%s want=%s", stopped.Status, model.ServerConnectionStatusStopped)
+	}
+	if stopped.AutoStart {
+		t.Fatalf("disconnect should disable auto_start: %+v", stopped)
 	}
 
 	logs, total, err := db.ListAuditLogs(context.Background(), database, 10, 0)

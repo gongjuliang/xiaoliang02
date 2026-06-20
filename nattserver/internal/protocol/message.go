@@ -130,10 +130,16 @@ type Heartbeat struct {
 	ClientTime int64 `json:"client_time"`
 }
 
-// HeartbeatAck 心跳确认Payload：服务端回复当前时间。
+// HeartbeatAck 心跳确认Payload：服务端回复当前时间，并可携带当前隧道状态。
 type HeartbeatAck struct {
 	// ServerTime 服务端当前的Unix时间戳（秒）。
 	ServerTime int64 `json:"server_time"`
+	// TunnelStatus 服务端隧道状态，老版本可能不携带。
+	TunnelStatus string `json:"tunnel_status,omitempty"`
+	// LastError 服务端隧道状态详情。
+	LastError string `json:"last_error,omitempty"`
+	// RemotePort 服务端公网监听端口。
+	RemotePort int `json:"remote_port,omitempty"`
 }
 
 // DataOpen 数据通道打开Payload：服务端通知客户端/外部用户建立数据连接。

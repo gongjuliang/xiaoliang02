@@ -249,6 +249,34 @@ func MarkServerConnectionStopped(ctx context.Context, database *sql.DB, id int64
 	return err
 }
 
+func MarkServerConnectionManualStart(ctx context.Context, database *sql.DB, id int64) (model.ServerConnection, error) {
+	result, err := database.ExecContext(ctx, `
+UPDATE tunnel_connections
+SET status = 'connected', auto_start = 1, last_error = NULL
+WHERE id = ?;`, id)
+	if err != nil {
+		return model.ServerConnection{}, mapSQLiteError("manual start server connection", err)
+	}
+	if err := ensureRowsAffected(result, ErrNotFound); err != nil {
+		return model.ServerConnection{}, err
+	}
+	return GetServerConnectionByID(ctx, database, id)
+}
+
+func MarkServerConnectionManualStop(ctx context.Context, database *sql.DB, id int64) (model.ServerConnection, error) {
+	result, err := database.ExecContext(ctx, `
+UPDATE tunnel_connections
+SET status = 'stopped', auto_start = 0, last_error = NULL
+WHERE id = ?;`, id)
+	if err != nil {
+		return model.ServerConnection{}, mapSQLiteError("manual stop server connection", err)
+	}
+	if err := ensureRowsAffected(result, ErrNotFound); err != nil {
+		return model.ServerConnection{}, err
+	}
+	return GetServerConnectionByID(ctx, database, id)
+}
+
 type serverConnectionScanner interface {
 	Scan(dest ...any) error
 }

@@ -283,6 +283,25 @@ WHERE id = ?;`, lastError, id)
 	return GetTunnelByID(ctx, database, id)
 }
 
+// SetTunnelWaiting 将隧道设置为waiting并开启auto_start，等待客户端上线后自动启动。
+func SetTunnelWaiting(ctx context.Context, database *sql.DB, id int64) (model.Tunnel, error) {
+	result, err := database.ExecContext(ctx, `
+UPDATE tunnels
+SET status = 'waiting', auto_start = 1, last_error = NULL
+WHERE id = ?;`, id)
+	if err != nil {
+		return model.Tunnel{}, mapSQLiteError("set tunnel waiting", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return model.Tunnel{}, fmt.Errorf("get tunnel waiting rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return model.Tunnel{}, ErrNotFound
+	}
+	return GetTunnelByID(ctx, database, id)
+}
+
 // tunnelScanner 隧道扫描器接口，抽象sql.Row和sql.Rows的Scan方法。
 type tunnelScanner interface {
 	Scan(dest ...any) error

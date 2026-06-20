@@ -94,12 +94,18 @@ func TestServerConnectionManagementFlow(t *testing.T) {
 	if connected.Status != model.ServerConnectionStatusConnected {
 		t.Fatalf("server connection status=%s want connected", connected.Status)
 	}
+	if !connected.AutoStart {
+		t.Fatalf("start should enable auto_start: %+v", connected)
+	}
 
 	stopResp := authorizedJSON(t, router, http.MethodPost, "/api/client/v1/tunnel-connections/1/stop", tokens.AccessToken, nil)
 	var stopped model.ServerConnection
 	decodeResponseData(t, stopResp, &stopped)
 	if stopped.Status != model.ServerConnectionStatusStopped {
 		t.Fatalf("server connection status=%s want stopped", stopped.Status)
+	}
+	if stopped.AutoStart {
+		t.Fatalf("stop should disable auto_start: %+v", stopped)
 	}
 
 	deleteResp := authorizedJSON(t, router, http.MethodDelete, "/api/client/v1/tunnel-connections/1", tokens.AccessToken, nil)

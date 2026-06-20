@@ -254,6 +254,7 @@ func TestServerClosesPublicConnectionWhenClientSendsDataClose(t *testing.T) {
 	}
 
 	_ = controlConn.Close()
+	waitForClientStatus(t, database, client.ID, model.OnlineStatusOffline)
 	cancel()
 	select {
 	case err := <-runDone:

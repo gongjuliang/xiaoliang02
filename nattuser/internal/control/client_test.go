@@ -322,6 +322,157 @@ func TestManagerMarksConnectionErrorAndClosesDataWhenTunnelStops(t *testing.T) {
 	}
 }
 
+func TestManagerMarksConnectionErrorFromStoppedHeartbeatAck(t *testing.T) {
+	ctx := context.Background()
+	database, err := db.Open(ctx, filepath.Join(t.TempDir(), "test.db"), nil)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer database.Close()
+
+	connection, err := db.CreateServerConnection(ctx, database, db.CreateServerConnectionParams{
+		Name:         "stopped-heartbeat",
+		ServerHost:   "127.0.0.1",
+		ServerPort:   7000,
+		DataPort:     7001,
+		ClientSecret: "xiaoliang_client_secret",
+		AutoStart:    true,
+	})
+	if err != nil {
+		t.Fatalf("create server connection: %v", err)
+	}
+	if err := db.MarkServerConnectionConnected(ctx, database, connection.ID); err != nil {
+		t.Fatalf("mark connected: %v", err)
+	}
+
+	manager := NewManagerWithOptions(config.Default(), database, nil, Options{})
+	dataSide, peerSide := net.Pipe()
+	defer peerSide.Close()
+	manager.registerDataConnection(connection.ID, "stopped-heartbeat-data", dataSide)
+
+	ack, err := protocol.NewMessage(protocol.TypeHeartbeatAck, 42, 7, "", protocol.HeartbeatAck{
+		ServerTime:   time.Now().Unix(),
+		TunnelStatus: "stopped",
+		RemotePort:   25530,
+	})
+	if err != nil {
+		t.Fatalf("build heartbeat ack: %v", err)
+	}
+	if err := manager.handleMessage(ctx, connection.ID, nil, ack); err != nil {
+		t.Fatalf("handle heartbeat ack: %v", err)
+	}
+
+	stored, err := db.GetServerConnectionByID(ctx, database, connection.ID)
+	if err != nil {
+		t.Fatalf("get server connection: %v", err)
+	}
+	if stored.Status != model.ServerConnectionStatusError || stored.LastError != serverTunnelStoppedError {
+		t.Fatalf("stored connection=%+v, want stopped heartbeat error", stored)
+	}
+	manager.dataMu.Lock()
+	_, stillActive := manager.data["stopped-heartbeat-data"]
+	manager.dataMu.Unlock()
+	if stillActive {
+		t.Fatal("data session was not removed after stopped heartbeat")
+	}
+	_ = peerSide.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	if _, err := peerSide.Read(make([]byte, 1)); err == nil {
+		t.Fatal("data peer remained readable after stopped heartbeat")
+	} else if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+		t.Fatalf("data peer was not closed before deadline: %v", err)
+	}
+}
+
+func TestManagerMarksConnectionErrorFromErrorHeartbeatAck(t *testing.T) {
+	ctx := context.Background()
+	database, err := db.Open(ctx, filepath.Join(t.TempDir(), "test.db"), nil)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer database.Close()
+
+	connection, err := db.CreateServerConnection(ctx, database, db.CreateServerConnectionParams{
+		Name:         "error-heartbeat",
+		ServerHost:   "127.0.0.1",
+		ServerPort:   7000,
+		DataPort:     7001,
+		ClientSecret: "xiaoliang_client_secret",
+		AutoStart:    true,
+	})
+	if err != nil {
+		t.Fatalf("create server connection: %v", err)
+	}
+	if err := db.MarkServerConnectionConnected(ctx, database, connection.ID); err != nil {
+		t.Fatalf("mark connected: %v", err)
+	}
+
+	manager := NewManagerWithOptions(config.Default(), database, nil, Options{})
+	ack, err := protocol.NewMessage(protocol.TypeHeartbeatAck, 42, 7, "", protocol.HeartbeatAck{
+		ServerTime:   time.Now().Unix(),
+		TunnelStatus: "error",
+		LastError:    "服务端公网端口被占用",
+	})
+	if err != nil {
+		t.Fatalf("build heartbeat ack: %v", err)
+	}
+	if err := manager.handleMessage(ctx, connection.ID, nil, ack); err != nil {
+		t.Fatalf("handle heartbeat ack: %v", err)
+	}
+
+	stored, err := db.GetServerConnectionByID(ctx, database, connection.ID)
+	if err != nil {
+		t.Fatalf("get server connection: %v", err)
+	}
+	if stored.Status != model.ServerConnectionStatusError || stored.LastError != "服务端公网端口被占用" {
+		t.Fatalf("stored connection=%+v, want server error detail", stored)
+	}
+}
+
+func TestManagerHeartbeatAckRunningUpdatesRemotePort(t *testing.T) {
+	ctx := context.Background()
+	database, err := db.Open(ctx, filepath.Join(t.TempDir(), "test.db"), nil)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer database.Close()
+
+	connection, err := db.CreateServerConnection(ctx, database, db.CreateServerConnectionParams{
+		Name:         "running-heartbeat",
+		ServerHost:   "127.0.0.1",
+		ServerPort:   7000,
+		DataPort:     7001,
+		ClientSecret: "xiaoliang_client_secret",
+		AutoStart:    true,
+	})
+	if err != nil {
+		t.Fatalf("create server connection: %v", err)
+	}
+	if _, err := db.SetServerConnectionStatus(ctx, database, connection.ID, model.ServerConnectionStatusError, "旧错误"); err != nil {
+		t.Fatalf("set error status: %v", err)
+	}
+
+	manager := NewManagerWithOptions(config.Default(), database, nil, Options{})
+	ack, err := protocol.NewMessage(protocol.TypeHeartbeatAck, 42, 7, "", protocol.HeartbeatAck{
+		ServerTime:   time.Now().Unix(),
+		TunnelStatus: "running",
+		RemotePort:   25530,
+	})
+	if err != nil {
+		t.Fatalf("build heartbeat ack: %v", err)
+	}
+	if err := manager.handleMessage(ctx, connection.ID, nil, ack); err != nil {
+		t.Fatalf("handle heartbeat ack: %v", err)
+	}
+
+	stored, err := db.GetServerConnectionByID(ctx, database, connection.ID)
+	if err != nil {
+		t.Fatalf("get server connection: %v", err)
+	}
+	if stored.Status != model.ServerConnectionStatusConnected || stored.LastError != "" || stored.RemotePort != 25530 {
+		t.Fatalf("stored connection after running heartbeat=%+v, want connected remote_port=25530", stored)
+	}
+}
+
 func TestManagerStoresStoppedTunnelAuthErrorFromServer(t *testing.T) {
 	ctx := context.Background()
 	database, err := db.Open(ctx, filepath.Join(t.TempDir(), "test.db"), nil)

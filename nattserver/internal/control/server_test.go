@@ -253,6 +253,364 @@ func TestServerRestartsAutoStartTunnelsWhenClientReconnects(t *testing.T) {
 	}
 }
 
+func TestServerRecoversManuallyStartedTunnelWhenClientReconnects(t *testing.T) {
+	ctx := context.Background()
+	database, err := db.Open(ctx, filepath.Join(t.TempDir(), "test.db"), nil)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer database.Close()
+
+	secretHash, err := auth.HashPassword("natt_client_secret")
+	if err != nil {
+		t.Fatalf("hash client secret: %v", err)
+	}
+	client, err := db.CreateClient(ctx, database, db.CreateClientParams{
+		Name:       "client-a",
+		SecretHash: secretHash,
+		SecretHint: auth.SecretHint("natt_client_secret"),
+	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	tunnel, err := db.CreateTunnel(ctx, database, db.CreateTunnelParams{
+		Name:       "manual-echo",
+		ClientID:   client.ID,
+		Protocol:   model.TunnelProtocolTCP,
+		RemoteHost: "127.0.0.1",
+		RemotePort: freeTCPPort(t),
+		AutoStart:  false,
+	})
+	if err != nil {
+		t.Fatalf("create tunnel: %v", err)
+	}
+	markTunnelConnectable(t, ctx, database, tunnel.ID)
+
+	controlPort := freeTCPPort(t)
+	dataPort := freeTCPPort(t)
+	server := NewServer(config.ProtocolConfig{
+		ControlHost: "127.0.0.1",
+		ControlPort: controlPort,
+		DataHost:    "127.0.0.1",
+		DataPort:    dataPort,
+	}, database, nil)
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- server.Run(runCtx)
+	}()
+
+	firstConn := authenticateFakeClient(t, controlPort, "natt_client_secret")
+	if _, err := server.StartTunnel(ctx, tunnel.ID); err != nil {
+		t.Fatalf("start manual tunnel: %v", err)
+	}
+	expectTunnelStartCommand(t, firstConn, tunnel.ID)
+	waitForTunnelStatus(t, database, tunnel.ID, model.TunnelStatusRunning)
+	_ = firstConn.Close()
+	waitForClientStatus(t, database, client.ID, model.OnlineStatusOffline)
+	waitForTunnelStatus(t, database, tunnel.ID, model.TunnelStatusError)
+	assertTunnelLastError(t, database, tunnel.ID, controlOfflineMessage)
+
+	secondConn := authenticateFakeClient(t, controlPort, "natt_client_secret")
+	defer secondConn.Close()
+	expectTunnelStartCommand(t, secondConn, tunnel.ID)
+	waitForTunnelStatus(t, database, tunnel.ID, model.TunnelStatusRunning)
+	assertTunnelLastError(t, database, tunnel.ID, "")
+
+	cancel()
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("server run returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for server shutdown")
+	}
+}
+
+func TestServerHeartbeatRecoversOfflineControlError(t *testing.T) {
+	ctx := context.Background()
+	database, err := db.Open(ctx, filepath.Join(t.TempDir(), "test.db"), nil)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer database.Close()
+
+	secretHash, err := auth.HashPassword("natt_client_secret")
+	if err != nil {
+		t.Fatalf("hash client secret: %v", err)
+	}
+	client, err := db.CreateClient(ctx, database, db.CreateClientParams{
+		Name:       "client-a",
+		SecretHash: secretHash,
+		SecretHint: auth.SecretHint("natt_client_secret"),
+	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	tunnel, err := db.CreateTunnel(ctx, database, db.CreateTunnelParams{
+		Name:       "heartbeat-recover",
+		ClientID:   client.ID,
+		Protocol:   model.TunnelProtocolTCP,
+		RemoteHost: "127.0.0.1",
+		RemotePort: freeTCPPort(t),
+		AutoStart:  false,
+	})
+	if err != nil {
+		t.Fatalf("create tunnel: %v", err)
+	}
+	markTunnelConnectable(t, ctx, database, tunnel.ID)
+
+	controlPort := freeTCPPort(t)
+	dataPort := freeTCPPort(t)
+	server := NewServer(config.ProtocolConfig{
+		ControlHost: "127.0.0.1",
+		ControlPort: controlPort,
+		DataHost:    "127.0.0.1",
+		DataPort:    dataPort,
+	}, database, nil)
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- server.Run(runCtx)
+	}()
+
+	conn := authenticateFakeClient(t, controlPort, "natt_client_secret")
+	defer conn.Close()
+	if _, err := db.SetTunnelStatus(ctx, database, tunnel.ID, model.TunnelStatusError, controlOfflineMessage); err != nil {
+		t.Fatalf("set offline error: %v", err)
+	}
+
+	heartbeat, err := protocol.NewMessage(protocol.TypeHeartbeat, client.ID, tunnel.ID, "", protocol.Heartbeat{ClientTime: time.Now().Unix()})
+	if err != nil {
+		t.Fatalf("build heartbeat: %v", err)
+	}
+	if err := protocol.WriteMessage(conn, heartbeat); err != nil {
+		t.Fatalf("write heartbeat: %v", err)
+	}
+	expectTunnelStartAndHeartbeatAck(t, conn, tunnel.ID, heartbeat.RequestID)
+	waitForTunnelStatus(t, database, tunnel.ID, model.TunnelStatusRunning)
+	assertTunnelLastError(t, database, tunnel.ID, "")
+
+	cancel()
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("server run returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for server shutdown")
+	}
+}
+
+func TestServerStartTunnelWithoutOnlineClientMovesToWaiting(t *testing.T) {
+	ctx := context.Background()
+	database, err := db.Open(ctx, filepath.Join(t.TempDir(), "test.db"), nil)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer database.Close()
+
+	secretHash, err := auth.HashPassword("natt_client_secret")
+	if err != nil {
+		t.Fatalf("hash client secret: %v", err)
+	}
+	client, err := db.CreateClient(ctx, database, db.CreateClientParams{
+		Name:       "client-a",
+		SecretHash: secretHash,
+		SecretHint: auth.SecretHint("natt_client_secret"),
+	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	remotePort := freeTCPPort(t)
+	tunnel, err := db.CreateTunnel(ctx, database, db.CreateTunnelParams{
+		Name:       "offline-start",
+		ClientID:   client.ID,
+		Protocol:   model.TunnelProtocolTCP,
+		RemoteHost: "127.0.0.1",
+		RemotePort: remotePort,
+		AutoStart:  false,
+	})
+	if err != nil {
+		t.Fatalf("create tunnel: %v", err)
+	}
+
+	server := NewServer(config.ProtocolConfig{}, database, nil)
+	started, err := server.StartTunnel(ctx, tunnel.ID)
+	if err != nil {
+		t.Fatalf("start offline tunnel: %v", err)
+	}
+	if started.Status != model.TunnelStatusWaiting || !started.AutoStart || started.LastError != "" {
+		t.Fatalf("offline start returned %+v, want waiting auto_start with empty last_error", started)
+	}
+	stored, err := db.GetTunnelByID(ctx, database, tunnel.ID)
+	if err != nil {
+		t.Fatalf("get stored tunnel: %v", err)
+	}
+	if stored.Status != model.TunnelStatusWaiting || !stored.AutoStart || stored.LastError != "" {
+		t.Fatalf("stored tunnel after offline start=%+v, want waiting auto_start with empty last_error", stored)
+	}
+	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", remotePort))
+	if err != nil {
+		t.Fatalf("offline start should not bind public port %d: %v", remotePort, err)
+	}
+	_ = listener.Close()
+}
+
+func TestServerHeartbeatAckIncludesCurrentTunnelStatus(t *testing.T) {
+	ctx := context.Background()
+	database, err := db.Open(ctx, filepath.Join(t.TempDir(), "test.db"), nil)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer database.Close()
+
+	secretHash, err := auth.HashPassword("natt_client_secret")
+	if err != nil {
+		t.Fatalf("hash client secret: %v", err)
+	}
+	client, err := db.CreateClient(ctx, database, db.CreateClientParams{
+		Name:       "client-a",
+		SecretHash: secretHash,
+		SecretHint: auth.SecretHint("natt_client_secret"),
+	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	remotePort := freeTCPPort(t)
+	tunnel, err := db.CreateTunnel(ctx, database, db.CreateTunnelParams{
+		Name:       "heartbeat-state",
+		ClientID:   client.ID,
+		Protocol:   model.TunnelProtocolTCP,
+		RemoteHost: "127.0.0.1",
+		RemotePort: remotePort,
+		AutoStart:  false,
+	})
+	if err != nil {
+		t.Fatalf("create tunnel: %v", err)
+	}
+	if _, err := db.SetTunnelStatus(ctx, database, tunnel.ID, model.TunnelStatusError, "公网端口被占用"); err != nil {
+		t.Fatalf("set tunnel error: %v", err)
+	}
+
+	controlPort := freeTCPPort(t)
+	server := NewServer(config.ProtocolConfig{
+		ControlHost: "127.0.0.1",
+		ControlPort: controlPort,
+	}, database, nil)
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- server.Run(runCtx)
+	}()
+
+	conn := authenticateFakeClient(t, controlPort, "natt_client_secret")
+	defer conn.Close()
+	heartbeat, err := protocol.NewMessage(protocol.TypeHeartbeat, client.ID, tunnel.ID, "", protocol.Heartbeat{ClientTime: time.Now().Unix()})
+	if err != nil {
+		t.Fatalf("build heartbeat: %v", err)
+	}
+	if err := protocol.WriteMessage(conn, heartbeat); err != nil {
+		t.Fatalf("write heartbeat: %v", err)
+	}
+	ackMsg, err := protocol.ReadMessage(conn)
+	if err != nil {
+		t.Fatalf("read heartbeat ack: %v", err)
+	}
+	if ackMsg.Type != protocol.TypeHeartbeatAck || ackMsg.RequestID != heartbeat.RequestID {
+		t.Fatalf("unexpected heartbeat ack: %+v", ackMsg)
+	}
+	ack, err := protocol.DecodePayload[protocol.HeartbeatAck](ackMsg)
+	if err != nil {
+		t.Fatalf("decode heartbeat ack: %v", err)
+	}
+	if ack.TunnelStatus != string(model.TunnelStatusError) || ack.LastError != "公网端口被占用" || ack.RemotePort != remotePort {
+		t.Fatalf("heartbeat ack payload=%+v, want error with last_error and remote_port=%d", ack, remotePort)
+	}
+
+	cancel()
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("server run returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for server shutdown")
+	}
+}
+
+func TestServerDoesNotRecoverNonOfflineTunnelErrorOnReconnect(t *testing.T) {
+	ctx := context.Background()
+	database, err := db.Open(ctx, filepath.Join(t.TempDir(), "test.db"), nil)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer database.Close()
+
+	secretHash, err := auth.HashPassword("natt_client_secret")
+	if err != nil {
+		t.Fatalf("hash client secret: %v", err)
+	}
+	client, err := db.CreateClient(ctx, database, db.CreateClientParams{
+		Name:       "client-a",
+		SecretHash: secretHash,
+		SecretHint: auth.SecretHint("natt_client_secret"),
+	})
+	if err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	tunnel, err := db.CreateTunnel(ctx, database, db.CreateTunnelParams{
+		Name:       "port-error",
+		ClientID:   client.ID,
+		Protocol:   model.TunnelProtocolTCP,
+		RemoteHost: "127.0.0.1",
+		RemotePort: freeTCPPort(t),
+		AutoStart:  true,
+	})
+	if err != nil {
+		t.Fatalf("create tunnel: %v", err)
+	}
+	const portError = "listen remote port: bind failed"
+	if _, err := db.SetTunnelStatus(ctx, database, tunnel.ID, model.TunnelStatusError, portError); err != nil {
+		t.Fatalf("set non-offline error: %v", err)
+	}
+
+	controlPort := freeTCPPort(t)
+	dataPort := freeTCPPort(t)
+	server := NewServer(config.ProtocolConfig{
+		ControlHost: "127.0.0.1",
+		ControlPort: controlPort,
+		DataHost:    "127.0.0.1",
+		DataPort:    dataPort,
+	}, database, nil)
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- server.Run(runCtx)
+	}()
+
+	conn := authenticateFakeClient(t, controlPort, "natt_client_secret")
+	defer conn.Close()
+	assertNoControlMessage(t, conn)
+	waitForTunnelStatus(t, database, tunnel.ID, model.TunnelStatusError)
+	assertTunnelLastError(t, database, tunnel.ID, portError)
+
+	cancel()
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("server run returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for server shutdown")
+	}
+}
+
 func TestServerAllowsWaitingAutoStartTunnelOnFirstConnection(t *testing.T) {
 	ctx := context.Background()
 	database, err := db.Open(ctx, filepath.Join(t.TempDir(), "test.db"), nil)
@@ -750,6 +1108,24 @@ func waitForTunnelStatus(t *testing.T, database *sql.DB, id int64, want model.Tu
 	t.Fatalf("tunnel status=%s want=%s", got, want)
 }
 
+func assertTunnelLastError(t *testing.T, database *sql.DB, id int64, want string) {
+	t.Helper()
+	var got sql.NullString
+	if err := database.QueryRowContext(context.Background(), "SELECT last_error FROM tunnels WHERE id = ?", id).Scan(&got); err != nil {
+		t.Fatalf("query tunnel last_error: %v", err)
+	}
+	if value := nullableTestString(got); value != want {
+		t.Fatalf("tunnel last_error=%q want=%q", value, want)
+	}
+}
+
+func nullableTestString(value sql.NullString) string {
+	if !value.Valid {
+		return ""
+	}
+	return value.String
+}
+
 func markTunnelConnectable(t *testing.T, ctx context.Context, database *sql.DB, id int64) {
 	t.Helper()
 	if _, err := db.SetTunnelStatus(ctx, database, id, model.TunnelStatusRunning, ""); err != nil {
@@ -768,4 +1144,46 @@ func expectTunnelStartCommand(t *testing.T, conn net.Conn, tunnelID int64) {
 	if message.Type != protocol.TypeTunnelStart || message.TunnelID != tunnelID {
 		t.Fatalf("unexpected tunnel_start command: %+v", message)
 	}
+}
+
+func expectTunnelStartAndHeartbeatAck(t *testing.T, conn net.Conn, tunnelID int64, heartbeatRequestID string) {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	defer conn.SetReadDeadline(time.Time{})
+	seenStart := false
+	seenAck := false
+	for !seenStart || !seenAck {
+		message, err := protocol.ReadMessage(conn)
+		if err != nil {
+			t.Fatalf("read recovery messages: %v seen_start=%t seen_ack=%t", err, seenStart, seenAck)
+		}
+		switch message.Type {
+		case protocol.TypeTunnelStart:
+			if message.TunnelID != tunnelID {
+				t.Fatalf("unexpected tunnel_start command: %+v", message)
+			}
+			seenStart = true
+		case protocol.TypeHeartbeatAck:
+			if message.RequestID != heartbeatRequestID {
+				t.Fatalf("unexpected heartbeat ack: %+v", message)
+			}
+			seenAck = true
+		default:
+			t.Fatalf("unexpected recovery message: %+v", message)
+		}
+	}
+}
+
+func assertNoControlMessage(t *testing.T, conn net.Conn) {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(150 * time.Millisecond))
+	defer conn.SetReadDeadline(time.Time{})
+	message, err := protocol.ReadMessage(conn)
+	if err == nil {
+		t.Fatalf("unexpected control message: %+v", message)
+	}
+	if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+		return
+	}
+	t.Fatalf("read control message failed with non-timeout error: %v", err)
 }

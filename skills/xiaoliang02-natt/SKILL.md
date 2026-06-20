@@ -33,6 +33,10 @@ Use this skill when working on the `xiaoliang02` intranet penetration project. P
 - MCP uses standard JSON-RPC Streamable HTTP at `POST /mcp`; do not use the old `/mcp/tools/call` path.
 - Server MCP `server.create_tunnel` defaults omitted `auto_start` to `true`, creating a `waiting` tunnel.
 - Client MCP can create/delete tunnel connections with `client.create_tunnel_connection` and `client.delete_tunnel_connection`.
+- Client manual disconnect semantics: Web/MCP disconnect must set `status=stopped`, clear `last_error`, and set `auto_start=false`; Web/MCP connect must set `auto_start=true` so manager reconnects again.
+- Server manual start while the client is offline must set the tunnel to `waiting`, enable `auto_start`, clear `last_error`, and not bind the public port until the client reconnects.
+- Server tunnel recovery: only auto-recover `status=error` when `last_error` is exactly `隧道控制连接已离线`; reconnect or heartbeat should restart the tunnel and clear that error.
+- Heartbeat acks carry `tunnel_status`, `last_error`, and `remote_port`; client heartbeat handling must sync server `stopped`/`error` into local visible status.
 - Audit logs are JSONL files under `xiaoliang02_*/logs/audit/YYYY-MM-DD.jsonl`, not SQLite audit storage.
 
 ## Common Commands

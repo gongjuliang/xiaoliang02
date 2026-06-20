@@ -261,7 +261,7 @@ Web 登录：
 
 - 隧道名称。
 - 公网监听地址和公网监听端口。
-- 状态：`stopped`、`starting`、`running`、`stopping`、`error`。
+- 状态：`stopped`、`waiting`、`starting`、`running`、`stopping`、`error`。
 - `auto_start`，表示 nattuser 连接后自动启动。
 - 状态详情 `last_error`。
 - 上行字节 `bytes_in` 和下行字节 `bytes_out`。
@@ -286,7 +286,11 @@ Web 登录：
 - 如果隧道被其他客户端占用，新客户端连接返回中文状态详情“该连接正在占用，不得连接”。
 - 如果服务端隧道为 `stopped`，客户端首次连接或运行中收到停止指令后状态改为 `error`，状态详情为“服务端暂停了隧道连接，请通知服务端人员启动隧道。”。
 - 删除或停止隧道后释放公网监听端口。
-- 客户端断线后自动重连。
+- 当管理员启动隧道但对应 nattuser 未在线时，服务端不得写入“隧道 X 未在线”错误，应将隧道设置为 `waiting`、`auto_start=true`、清空 `last_error`，等待客户端重新上线后自动启动。
+- 客户端因网络异常或进程短暂中断断线后，如果该连接仍允许自启动，则自动重连。
+- 客户端后台点击“断开”属于用户主动停止，必须同时设置 `auto_start=false`；之后不再自动重连，直到用户点击“连接”重新设置 `auto_start=true`。
+- 服务端隧道因控制连接离线进入 `error`，且 `last_error=隧道控制连接已离线` 时，原客户端重新上线或发送心跳后应自动恢复隧道并清空该错误；其他错误不得自动恢复。
+- 服务端 `heartbeat_ack` 应携带当前 `tunnel_status`、`last_error`、`remote_port`；客户端收到服务端 `stopped` 或带详情的 `error` 后，应将本地连接同步为 `error` 并展示对应中文状态详情。
 
 ## 八、Web 管理后台
 
