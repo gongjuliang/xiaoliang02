@@ -26,7 +26,7 @@
 ## 项目结构
 
 ```text
-D:\2025Code\ai\natt
+当前项目目录路径\natt
   nattserver\    服务端项目
   nattuser\      客户端项目
   skills\        项目 AI Skill
@@ -90,7 +90,7 @@ nattuser\xiaoliang02_user\
 ### 1. 启动服务端
 
 ```powershell
-cd D:\2025Code\ai\natt\nattserver
+cd 当前项目目录路径\natt\nattserver
 go run .
 ```
 
@@ -108,7 +108,7 @@ http://127.0.0.1:25510/init.html
 ### 2. 启动客户端
 
 ```powershell
-cd D:\2025Code\ai\natt\nattuser
+cd 当前项目目录路径\natt\nattuser
 go run .
 ```
 
@@ -123,20 +123,20 @@ http://127.0.0.1:25520/init.html
 ### 3. 显式配置启动
 
 ```powershell
-cd D:\2025Code\ai\natt\nattserver
+cd 当前项目目录路径\natt\nattserver
 go run . -config xiaoliang02_server\config\config.json
 
-cd D:\2025Code\ai\natt\nattuser
+cd 当前项目目录路径\natt\nattuser
 go run . -config xiaoliang02_user\config\config.json
 ```
 
 ### 4. 编译
 
 ```powershell
-cd D:\2025Code\ai\natt\nattserver
+cd 当前项目目录路径\natt\nattserver
 go build -p 1 ./...
 
-cd D:\2025Code\ai\natt\nattuser
+cd 当前项目目录路径\natt\nattuser
 go build -p 1 ./...
 ```
 
@@ -249,7 +249,7 @@ X-MCP-Token: <MCP_KEY>
 服务端：
 
 ```powershell
-cd D:\2025Code\ai\natt\nattserver
+cd 当前项目目录路径\natt\nattserver
 go test ./... -count=1 -p 1
 go build -p 1 ./...
 ```
@@ -257,7 +257,7 @@ go build -p 1 ./...
 客户端：
 
 ```powershell
-cd D:\2025Code\ai\natt\nattuser
+cd 当前项目目录路径\natt\nattuser
 go test ./... -count=1 -p 1
 go build -p 1 ./...
 ```
