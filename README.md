@@ -11,6 +11,13 @@
 **注意: 使用或编译本软件前须阅读、理解并同意[免责声明](DISCLAIMER.md)的内容，若不同意可选择其他如:FRP、花生壳、Ngrok‌等同类软件。禁止利用本软件从事任何触犯中华人民共和国及其本软件部署地相关法律法规的行为。**
 
 ---
+
+## 软件下载方式
+
+1. 当前开源项目的发行版页 
+2. 百度网盘链接：[https://pan.baidu.com/s/1SvAqFQfEbizim0t7q6beeQ?pwd=6666](https://pan.baidu.com/s/1SvAqFQfEbizim0t7q6beeQ?pwd=6666)
+
+
 ## 核心特性
 
 - TCP 端口穿透，支持多客户端、多隧道并发。
