@@ -17,7 +17,8 @@
 1. 当前开源项目的发行版页 
 2. 百度网盘链接：[https://pan.baidu.com/s/1SvAqFQfEbizim0t7q6beeQ?pwd=6666](https://pan.baidu.com/s/1SvAqFQfEbizim0t7q6beeQ?pwd=6666)
 
-
+## 视频介绍和详细教程
+- 详细教程：[https://www.bilibili.com/video/BV14FNg6QELL/?spm_id_from=333.337.search-card.all.click](https://www.bilibili.com/video/BV14FNg6QELL/?spm_id_from=333.337.search-card.all.click)
 ## 核心特性
 
 - TCP 端口穿透，支持多客户端、多隧道并发。
