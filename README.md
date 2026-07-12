@@ -20,7 +20,6 @@
 ## 视频介绍和详细教程
 - 详细教程：[https://www.bilibili.com/video/BV14FNg6QELL/?spm_id_from=333.337.search-card.all.click](https://www.bilibili.com/video/BV14FNg6QELL/?spm_id_from=333.337.search-card.all.click)
 
-<iframe src="//player.bilibili.com/player.html?isOutside=true&aid=116906073922358&bvid=BV14FNg6QELL&cid=39878266355&p=1" scrolling="no" border="0" frameborder="no" framespacing="0" allowfullscreen="true"></iframe>
 ## 核心特性
 
 - TCP 端口穿透，支持多客户端、多隧道并发。
