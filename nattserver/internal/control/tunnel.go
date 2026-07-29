@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -64,9 +63,15 @@ type copyResult struct {
 // 参数id：隧道ID。
 // 返回值：更新后的隧道模型和可能的错误。
 func (s *Server) StartTunnel(ctx context.Context, id int64) (model.Tunnel, error) {
+	s.startMu.Lock()
+	defer s.startMu.Unlock()
+
 	tunnel, err := db.GetTunnelByID(ctx, s.database, id)
 	if err != nil {
 		return model.Tunnel{}, err
+	}
+	if tunnel.Protocol == model.TunnelProtocolUDP {
+		return s.startUDPTunnel(ctx, tunnel)
 	}
 	if tunnel.Protocol != model.TunnelProtocolTCP {
 		err := fmt.Errorf("unsupported tunnel protocol: %s", tunnel.Protocol)
@@ -85,7 +90,7 @@ func (s *Server) StartTunnel(ctx context.Context, id int64) (model.Tunnel, error
 		return db.SetTunnelWaiting(ctx, s.database, tunnel.ID)
 	}
 
-	listener, err := net.Listen("tcp", net.JoinHostPort(hostOrDefault(tunnel.RemoteHost), strconv.Itoa(tunnel.RemotePort)))
+	listener, err := s.listenPublicTCP(tunnel)
 	if err != nil {
 		return s.markTunnelError(ctx, tunnel.ID, fmt.Errorf("listen remote port: %w", err))
 	}
@@ -122,6 +127,17 @@ func (s *Server) StartTunnel(ctx context.Context, id int64) (model.Tunnel, error
 	return db.SetTunnelStatus(ctx, s.database, tunnel.ID, model.TunnelStatusRunning, "")
 }
 
+func (s *Server) listenPublicTCP(tunnel model.Tunnel) (net.Listener, error) {
+	listeners, ipv6Err, err := listenTCPDual(tunnel.RemoteHost, s.tunnelIPv6Host, tunnel.RemotePort)
+	if err != nil {
+		return nil, err
+	}
+	if ipv6Err != nil {
+		s.logError("IPv6公网TCP监听不可用，已继续使用IPv4 tunnel_id=%d: %v", tunnel.ID, ipv6Err)
+	}
+	return newDualTCPListener(listeners), nil
+}
+
 // StopTunnel 停止指定隧道，关闭公网监听和所有活跃数据连接。
 // 先发送data_close通知客户端关闭各数据连接，然后停止监听器，
 // 最后发送tunnel_stop命令并更新数据库状态。
@@ -139,6 +155,9 @@ func (s *Server) StopTunnel(ctx context.Context, id int64) (model.Tunnel, error)
 		for _, connectionID := range active.connectionIDs() {
 			s.sendDataClose(tunnel.ID, connectionID, protocol.CodeOK, "tunnel stopped")
 		}
+		active.stop()
+	}
+	if active := s.removeActiveUDPTunnel(id); active != nil {
 		active.stop()
 	}
 
@@ -275,6 +294,10 @@ func (s *Server) handleDataConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 	_ = conn.SetReadDeadline(time.Time{})
+	if message.Type == protocol.TypeUDPBind {
+		s.handleUDPRelay(ctx, conn, message)
+		return
+	}
 	if message.Type != protocol.TypeDataBind {
 		_ = writeWithDeadline(conn, protocol.NewErrorMessage(message.RequestID, protocol.CodeBadRequest, "首条数据消息必须是 data_bind"))
 		return
@@ -381,6 +404,7 @@ func (s *Server) stopAllTunnels() {
 	for _, tunnel := range active {
 		tunnel.stop()
 	}
+	s.stopAllUDPTunnels()
 }
 
 // stopTunnelRuntime 停止指定隧道的运行时资源。
@@ -399,6 +423,9 @@ func (s *Server) stopTunnelRuntime(tunnelID int64) {
 
 	for _, tunnel := range active {
 		tunnel.stop()
+	}
+	if udpTunnel := s.removeActiveUDPTunnel(tunnelID); udpTunnel != nil {
+		udpTunnel.stop()
 	}
 }
 

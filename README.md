@@ -2,9 +2,9 @@
 
 
 
-这是一套AI智能体(通过MCP)都能使用的 TCP 内网穿透工具，它基于 Go语言 采用 C/S 架构，由公网服务端 `nattserver` 和内网客户端 `nattuser` 组成。服务端负责公网监听、客户端授权、隧道状态和流量统计；客户端负责连接服务端、绑定本地目标服务，并把公网访问流量转发到内网 TCP 服务。
+这是一套 AI 智能体（通过 MCP）也能使用的 TCP/UDP 内网穿透工具。它基于 Go 语言采用 C/S 架构，由公网服务端 `nattserver` 和内网客户端 `nattuser` 组成。服务端负责公网监听、客户端授权、隧道状态和流量统计；客户端负责连接服务端、绑定本地目标服务，并把公网访问流量转发到内网 TCP 或 UDP 服务。
 
-当前版本只支持 TCP 端口穿透，不包含 UDP、HTTP 域名转发、P2P 打洞。
+TCP 与 UDP 分别在独立菜单中管理，不包含 HTTP 域名转发和 P2P 打洞。
 
 ---
 
@@ -17,12 +17,11 @@
 1. 当前开源项目的发行版页 
 2. 百度网盘链接：[https://pan.baidu.com/s/1SvAqFQfEbizim0t7q6beeQ?pwd=6666](https://pan.baidu.com/s/1SvAqFQfEbizim0t7q6beeQ?pwd=6666)
 
-## 视频介绍和详细教程
-- 详细教程：[https://www.bilibili.com/video/BV14FNg6QELL/?spm_id_from=333.337.search-card.all.click](https://www.bilibili.com/video/BV14FNg6QELL/?spm_id_from=333.337.search-card.all.click)
 
 ## 核心特性
 
-- TCP 端口穿透，支持多客户端、多隧道并发。
+- TCP 和 UDP 端口穿透，支持多客户端、多隧道并发。
+- Web、控制、数据以及公网 TCP/UDP 隧道均支持 IPv4/IPv6 双栈监听；IPv6 不可用时自动保留 IPv4 服务并记录中文警告。
 - 服务端 Web 控制台：客户端授权、隧道管理、流量监控、配置、审计、MCP 管理。
 - 客户端 Web 控制台：隧道连接、本地目标绑定、连接状态、配置、审计、MCP 管理。
 - SQLite 持久化用户、客户端授权、隧道、连接、配置和流量统计。
@@ -77,17 +76,17 @@ nattuser\xiaoliang02_user\
 
 | 用途 | 默认值 |
 | --- | --- |
-| Web 管理后台 | `0.0.0.0:25510` |
+| Web 管理后台 | `0.0.0.0:25510` 和 `[::]:25510` |
 | MCP 接口 | `0.0.0.0:25510/mcp` |
-| 客户端控制连接 | `0.0.0.0:25511` |
-| 客户端数据连接 | `0.0.0.0:25512` |
+| 客户端控制连接 | `0.0.0.0:25511` 和 `[::]:25511` |
+| 客户端数据连接 | `0.0.0.0:25512` 和 `[::]:25512` |
 | 公网映射端口范围 | `0-65535` |
 
 客户端：
 
 | 用途 | 默认值 |
 | --- | --- |
-| Web 管理后台 | `127.0.0.1:25520` |
+| Web 管理后台 | `0.0.0.0:25520` 和 `[::]:25520` |
 | MCP 接口 | `127.0.0.1:25520/mcp` |
 | 默认服务端控制端口 | `25511` |
 | 默认服务端数据端口 | `25512` |
@@ -155,16 +154,20 @@ go build -p 1 ./...
 
 1. 启动并初始化 `nattserver`。
 2. 在服务端后台新增客户端授权，复制生成的客户端秘钥。
-3. 在服务端后台新增 TCP 隧道，填写公网监听地址和公网监听端口；本地地址和本地端口不在服务端填写。
+3. 在服务端后台的“TCP 隧道”或“UDP 隧道”中新增隧道，填写公网监听地址和公网监听端口；本地地址和本地端口不在服务端填写。
 4. 根据需要勾选“nattuser 连接后自动启动”。
 5. 启动并初始化 `nattuser`。
 6. 在客户端后台新增隧道连接，填写服务端地址、控制端口、数据端口、服务端隧道秘钥、本地目标地址和本地目标端口。
-7. 启动客户端隧道连接后，通过服务端公网端口访问内网 TCP 服务。
+7. 在客户端对应的“TCP 隧道连接”或“UDP 隧道连接”页面创建本地目标绑定并启动连接。
+8. 启动后，通过服务端公网端口访问对应的内网 TCP 或 UDP 服务。
 
 隧道归属规则：
 
 - `nattserver` 管理公网监听端口、状态、秘钥和流量。
 - `nattuser` 管理服务端地址、服务端端口、隧道秘钥和本地目标。
+- TCP 和 UDP 可以使用同一公网端口号，因为服务端按 `(protocol, remote_port)` 区分；同一协议的公网端口不可重复。
+- UDP 公网源地址会映射为独立会话，本地 UDP 服务可在 60 秒空闲期内回包；单隧道默认最多 1024 个会话，单包最大 65507 字节。
+- UDP 中继通过既有数据 TCP 端口传输 `udp_bind`、`udp_bind_ack`、`udp_packet` 帧；客户端收到 `udp_bind_ack` 后才转发公网数据，避免首包在中继建立期间丢失。
 - 同一个服务端隧道同一时间只能被一个在线客户端占用。
 - 服务端隧道在客户端未在线时点击“启动”，会进入“待连接”状态并开启自动启动；客户端上线后自动变为运行中。
 - 客户端因网络异常断线后会自动重连；如果在客户端后台点击“断开”，会同时关闭该连接自启动，必须再次点击“连接”才恢复自动重连。
@@ -204,7 +207,7 @@ X-MCP-Token: <MCP_KEY>
 - `server.list_clients`
 - `server.get_client`
 - `server.list_tunnels`
-- `server.create_tunnel`（省略 `auto_start` 时默认 `true`，创建后进入待连接状态）
+- `server.create_tunnel`（支持 `tcp`、`udp`；省略 `protocol` 时为 `tcp`；省略 `auto_start` 时默认 `true`，创建后进入待连接状态）
 - `server.start_tunnel`
 - `server.stop_tunnel`
 - `server.delete_tunnel`
@@ -223,7 +226,7 @@ X-MCP-Token: <MCP_KEY>
 - `client.list_tunnels`
 - `client.get_network_status`
 
-客户端新增隧道连接工具参数：`name`、`server_host`、`client_secret`、`local_host`、`local_port` 为必填；`server_port`、`data_port` 可省略，省略时使用客户端配置里的默认控制端口和数据端口。
+客户端新增隧道连接工具参数：`name`、`server_host`、`client_secret`、`local_host`、`local_port` 为必填；可选 `protocol` 仅能为 `tcp`、`udp`，省略时为 `tcp`；`server_port`、`data_port` 可省略，省略时使用客户端配置里的默认控制端口和数据端口。隧道列表工具与 REST 列表接口支持 `protocol=tcp|udp` 过滤。
 
 工具发现示例：
 

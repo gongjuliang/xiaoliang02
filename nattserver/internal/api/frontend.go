@@ -66,10 +66,11 @@ func registerFrontendRoutes(router *gin.Engine) {
 		Template string // 对应的HTML模板文件名
 	}{
 		{Path: "/dashboard.html", Template: "dashboard.html"}, // 仪表盘页面
-		{Path: "/tunnels.html", Template: "tunnels.html"},     // 隧道管理页面
-		{Path: "/config.html", Template: "config.html"},       // 系统配置页面
-		{Path: "/mcp.html", Template: "mcp.html"},             // MCP管理页面
-		{Path: "/audit.html", Template: "audit.html"},         // 审计日志页面
+		{Path: "/tunnels.html", Template: "tunnels.html"},     // TCP 隧道管理页面
+		{Path: "/udp-tunnels.html", Template: "udp-tunnels.html"},
+		{Path: "/config.html", Template: "config.html"}, // 系统配置页面
+		{Path: "/mcp.html", Template: "mcp.html"},       // MCP管理页面
+		{Path: "/audit.html", Template: "audit.html"},   // 审计日志页面
 	} {
 		// 在闭包中捕获循环变量p的副本，避免所有路由使用同一个变量值
 		p := page

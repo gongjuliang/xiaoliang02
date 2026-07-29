@@ -25,7 +25,8 @@
         </div>
         <nav id="nav" class="nav-list">
             <button data-view="dashboard" data-src="/dashboard.html" type="button">本机状态</button>
-            <button data-view="tunnels" data-src="/tunnels.html" type="button">隧道连接</button>
+            <button data-view="tunnels" data-src="/tunnels.html" type="button">TCP 隧道连接</button>
+            <button data-view="udp-tunnels" data-src="/udp-tunnels.html" type="button">UDP 隧道连接</button>
             <button data-view="config" data-src="/config.html" type="button">配置</button>
             <button data-view="mcp" data-src="/mcp.html" type="button">MCP</button>
             <button data-view="audit" data-src="/audit.html" type="button">审计</button>
@@ -55,7 +56,8 @@ if (NATT.requireAuth()) {
     var activeViewKey = "natt_client_active_view";
     var titles = {
         dashboard: ["本机状态", "运行概览"],
-        tunnels: ["隧道连接", "服务端秘钥到本地目标的绑定"],
+        tunnels: ["TCP 隧道连接", "服务端 TCP 秘钥到本地目标的绑定"],
+        "udp-tunnels": ["UDP 隧道连接", "服务端 UDP 秘钥到本地 UDP 服务的绑定"],
         config: ["配置", "热加载与重启项"],
         mcp: ["MCP", "AI 工具访问控制"],
         audit: ["审计", "管理操作记录"]

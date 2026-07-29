@@ -2,7 +2,7 @@
 
 ## 一、项目目标与首版范围
 
-本项目是一套 C/S 架构的 TCP 内网穿透工具，通过公网服务器上的 `nattserver` 与内网机器上的 `nattuser` 配合，把公网 TCP 端口映射到内网 TCP 服务。
+本项目是一套 C/S 架构的 TCP/UDP 内网穿透工具，通过公网服务器上的 `nattserver` 与内网机器上的 `nattuser` 配合，把公网 TCP 或 UDP 端口映射到内网对应协议服务。
 
 当前前端品牌名：
 
@@ -11,7 +11,8 @@
 
 首版支持能力：
 
-- TCP 端口穿透。
+- TCP 和 UDP 端口穿透，且在 Web 控制台中使用独立菜单和页面。
+- Web、控制、数据和公网隧道的 IPv4/IPv6 双栈监听；IPv6 不可用时 IPv4 必须继续可用。
 - 多客户端、多隧道并发。
 - 服务端 Web 管理后台。
 - 客户端 Web 管理后台。
@@ -21,7 +22,6 @@
 
 首版不包含：
 
-- UDP 穿透。
 - HTTP 域名转发。
 - HTTPS 证书托管。
 - WebSocket 专用转发。
@@ -91,17 +91,17 @@ nattuser\
 
 | 用途 | 默认值 |
 | --- | --- |
-| Web 管理后台 | `0.0.0.0:25510` |
+| Web 管理后台 | `0.0.0.0:25510` 和 `[::]:25510` |
 | MCP 接口 | `0.0.0.0:25510/mcp` |
-| 客户端控制连接 | `0.0.0.0:25511` |
-| 客户端数据连接 | `0.0.0.0:25512` |
+| 客户端控制连接 | `0.0.0.0:25511` 和 `[::]:25511` |
+| 客户端数据连接 | `0.0.0.0:25512` 和 `[::]:25512` |
 | 公网映射端口范围 | `0-65535` |
 
 客户端：
 
 | 用途 | 默认值 |
 | --- | --- |
-| Web 管理后台 | `127.0.0.1:25520` |
+| Web 管理后台 | `0.0.0.0:25520` 和 `[::]:25520` |
 | MCP 接口 | `127.0.0.1:25520/mcp` |
 | 默认服务端控制端口 | `25511` |
 | 默认服务端数据端口 | `25512` |
@@ -153,6 +153,7 @@ Web 控制台 HTTPS 仅作用于 Web 管理后台，不恢复隧道协议 TLS。
   },
   "http": {
     "host": "0.0.0.0",
+    "ipv6_host": "::",
     "port": 25510,
     "https_enabled": false,
     "cert_file": "xiaoliang02_server/ssl/web.crt",
@@ -175,11 +176,16 @@ Web 控制台 HTTPS 仅作用于 Web 管理后台，不恢复隧道协议 TLS。
   },
   "protocol": {
     "control_host": "0.0.0.0",
+    "control_ipv6_host": "::",
     "control_port": 25511,
     "data_host": "0.0.0.0",
+    "data_ipv6_host": "::",
     "data_port": 25512
   },
   "tunnel": {
+    "ipv6_remote_host": "::",
+    "udp_session_idle_seconds": 60,
+    "udp_max_sessions": 1024,
     "remote_port_min": 0,
     "remote_port_max": 65535
   }
@@ -196,7 +202,8 @@ Web 控制台 HTTPS 仅作用于 Web 管理后台，不恢复隧道协议 TLS。
     "environment": "production"
   },
   "http": {
-    "host": "127.0.0.1",
+    "host": "0.0.0.0",
+    "ipv6_host": "::",
     "port": 25520,
     "https_enabled": false,
     "cert_file": "xiaoliang02_user/ssl/web.crt",
@@ -255,11 +262,12 @@ Web 登录：
 
 - 控制连接负责客户端认证、心跳、隧道状态同步、启停指令、错误通知。
 - 数据连接负责公网访问流量转发。
-- 每个公网访问连接建立对应的数据转发链路。
+- TCP 每个公网访问连接建立对应的数据转发链路；UDP 通过长期中继传输完整 UDP 数据报。
 
 服务端隧道由 `nattserver` 管理：
 
 - 隧道名称。
+- 协议：`tcp` 或 `udp`，默认 `tcp`。
 - 公网监听地址和公网监听端口。
 - 状态：`stopped`、`waiting`、`starting`、`running`、`stopping`、`error`。
 - `auto_start`，表示 nattuser 连接后自动启动。
@@ -277,6 +285,7 @@ Web 登录：
 - 本地目标端口。
 - 服务端公网监听端口，连接成功后由服务端回传并展示。
 - 状态和状态详情。
+- 协议：`tcp` 或 `udp`，默认 `tcp`；必须与服务端隧道协议一致。
 
 隧道归属规则：
 
@@ -291,6 +300,9 @@ Web 登录：
 - 客户端后台点击“断开”属于用户主动停止，必须同时设置 `auto_start=false`；之后不再自动重连，直到用户点击“连接”重新设置 `auto_start=true`。
 - 服务端隧道因控制连接离线进入 `error`，且 `last_error=隧道控制连接已离线` 时，原客户端重新上线或发送心跳后应自动恢复隧道并清空该错误；其他错误不得自动恢复。
 - 服务端 `heartbeat_ack` 应携带当前 `tunnel_status`、`last_error`、`remote_port`；客户端收到服务端 `stopped` 或带详情的 `error` 后，应将本地连接同步为 `error` 并展示对应中文状态详情。
+- 服务端同一 `(protocol, remote_port)` 只能有一条隧道；TCP 与 UDP 可以使用同一个端口号。
+- UDP 使用 `udp_bind`、`udp_bind_ack`、`udp_packet` 协议帧。服务端确认中继注册后再允许客户端转发数据，避免 UDP 首包在中继建立期间丢失。
+- UDP 公网源 `IP:端口` 对应一个会话，默认 60 秒未活动过期；每个 UDP 隧道默认上限 1024 会话，单包最大 65507 字节。本地服务仅能向已存在的公网会话回包。
 
 ## 八、Web 管理后台
 
@@ -300,6 +312,7 @@ Web 登录：
 - `index.html`
 - `dashboard.html`
 - `tunnels.html`
+- `udp-tunnels.html`
 - `config.html`
 - `audit.html`
 - `mcp.html`
@@ -309,7 +322,7 @@ Web 登录：
 服务端后台功能：
 
 - 客户端授权管理。
-- 隧道管理。
+- TCP 隧道与 UDP 隧道管理。
 - 配置查看与热更新。
 - MCP 配置、Key 查看和轮换。
 - 审计日志查询。
@@ -317,7 +330,7 @@ Web 登录：
 
 客户端后台功能：
 
-- 隧道连接管理。
+- TCP 隧道连接与 UDP 隧道连接管理。
 - 本地目标配置。
 - 配置查看与热更新。
 - MCP 配置、Key 查看和轮换。
@@ -380,7 +393,7 @@ MCP Key 由系统生成，启用 MCP 时如果没有 Key 会自动生成。后�
 - `server.list_clients`
 - `server.get_client`
 - `server.list_tunnels`
-- `server.create_tunnel`：创建服务端 TCP 隧道；未传 `auto_start` 时默认 `true`，初始状态为 `waiting`。
+- `server.create_tunnel`：创建服务端 TCP 或 UDP 隧道；未传 `protocol` 时默认 `tcp`，未传 `auto_start` 时默认 `true`，初始状态为 `waiting`。
 - `server.start_tunnel`
 - `server.stop_tunnel`
 - `server.delete_tunnel`
@@ -399,7 +412,7 @@ MCP Key 由系统生成，启用 MCP 时如果没有 Key 会自动生成。后�
 - `client.list_tunnels`
 - `client.get_network_status`
 
-客户端 `client.create_tunnel_connection` 必填参数为 `name`、`server_host`、`client_secret`、`local_host`、`local_port`；可选参数为 `server_port`、`data_port`、`auto_start`、`remark`。当 `server_port` 或 `data_port` 省略或为 `0` 时，使用客户端配置 `server_defaults.control_port` 和 `server_defaults.data_port`。
+客户端 `client.create_tunnel_connection` 必填参数为 `name`、`server_host`、`client_secret`、`local_host`、`local_port`；可选参数为 `protocol`、`server_port`、`data_port`、`auto_start`、`remark`。`protocol` 仅允许 `tcp`、`udp`，省略时为 `tcp`。当 `server_port` 或 `data_port` 省略或为 `0` 时，使用客户端配置 `server_defaults.control_port` 和 `server_defaults.data_port`。隧道列表工具和 REST 列表接口支持 `protocol=tcp|udp` 过滤。
 
 MCP 工具发现和工具调用必须写入审计日志，敏感参数需要脱敏。
 

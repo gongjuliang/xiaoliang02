@@ -330,7 +330,7 @@ func (h *serverHandler) createTunnel(ctx context.Context, raw json.RawMessage) (
 	}
 	tunnel, err := db.CreateTunnel(ctx, h.database, db.CreateTunnelParams{
 		Name:       params.Name,
-		Protocol:   model.TunnelProtocolTCP,
+		Protocol:   model.TunnelProtocol(params.Protocol),
 		RemoteHost: params.RemoteHost,
 		RemotePort: params.RemotePort,
 		AutoStart:  params.autoStartValue(),
@@ -429,8 +429,8 @@ func (h *serverHandler) validateTunnelParams(params *tunnelParams) error {
 	switch {
 	case params.Name == "":
 		return fmt.Errorf("name is required")
-	case params.Protocol != string(model.TunnelProtocolTCP):
-		return fmt.Errorf("only tcp protocol is supported")
+	case params.Protocol != string(model.TunnelProtocolTCP) && params.Protocol != string(model.TunnelProtocolUDP):
+		return fmt.Errorf("protocol must be tcp or udp")
 	case !validPort(params.RemotePort):
 		return fmt.Errorf("remote_port must be between 1 and 65535")
 	case params.RemotePort < h.tunnelCfg.RemotePortMin || params.RemotePort > h.tunnelCfg.RemotePortMax:
@@ -634,8 +634,8 @@ func serverTools() []mcpTool {
 	return []mcpTool{
 		{Name: "server.list_clients", Description: "List registered NATT clients.", InputSchema: pageSchema()},
 		{Name: "server.get_client", Description: "Get one NATT client by id.", InputSchema: idSchema()},
-		{Name: "server.list_tunnels", Description: "List server TCP tunnels.", InputSchema: pageSchema()},
-		{Name: "server.create_tunnel", Description: "Create a TCP tunnel on the server.", InputSchema: tunnelCreateSchema()},
+		{Name: "server.list_tunnels", Description: "List server TCP and UDP tunnels.", InputSchema: pageSchema()},
+		{Name: "server.create_tunnel", Description: "Create a TCP or UDP tunnel on the server.", InputSchema: tunnelCreateSchema()},
 		{Name: "server.start_tunnel", Description: "Start a server tunnel by id.", InputSchema: idSchema()},
 		{Name: "server.stop_tunnel", Description: "Stop a server tunnel by id.", InputSchema: idSchema()},
 		{Name: "server.delete_tunnel", Description: "Delete a server tunnel by id.", InputSchema: idSchema()},
@@ -662,7 +662,7 @@ func idSchema() map[string]any {
 func tunnelCreateSchema() map[string]any {
 	return objectSchema(map[string]any{
 		"name":        map[string]any{"type": "string"},
-		"protocol":    map[string]any{"type": "string", "enum": []string{"tcp"}},
+		"protocol":    map[string]any{"type": "string", "enum": []string{"tcp", "udp"}, "default": "tcp"},
 		"remote_host": map[string]any{"type": "string"},
 		"remote_port": map[string]any{"type": "integer", "minimum": 1, "maximum": 65535},
 		"auto_start":  map[string]any{"type": "boolean", "default": true, "description": "Omitted value defaults to true and creates a waiting tunnel."},

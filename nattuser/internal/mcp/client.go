@@ -90,6 +90,7 @@ type idParams struct {
 }
 
 type createTunnelConnectionParams struct {
+	Protocol     string `json:"protocol"`
 	Name         string `json:"name"`
 	ServerHost   string `json:"server_host"`
 	ServerPort   int    `json:"server_port"`
@@ -284,6 +285,7 @@ func (h *clientHandler) createTunnelConnection(ctx context.Context, raw json.Raw
 		return nil, err
 	}
 	connection, err := db.CreateServerConnection(ctx, h.database, db.CreateServerConnectionParams{
+		Protocol:     params.Protocol,
 		Name:         params.Name,
 		ServerHost:   params.ServerHost,
 		ServerPort:   params.ServerPort,
@@ -318,6 +320,7 @@ func (h *clientHandler) deleteTunnelConnection(ctx context.Context, raw json.Raw
 }
 
 func (h *clientHandler) validateCreateTunnelConnectionParams(params *createTunnelConnectionParams) error {
+	params.Protocol = strings.ToLower(strings.TrimSpace(params.Protocol))
 	params.Name = strings.TrimSpace(params.Name)
 	params.ServerHost = strings.TrimSpace(params.ServerHost)
 	params.ClientSecret = strings.TrimSpace(params.ClientSecret)
@@ -329,10 +332,15 @@ func (h *clientHandler) validateCreateTunnelConnectionParams(params *createTunne
 	if params.DataPort == 0 {
 		params.DataPort = h.serverDefaults.DataPort
 	}
+	if params.Protocol == "" {
+		params.Protocol = "tcp"
+	}
 
 	switch {
 	case params.Name == "":
 		return fmt.Errorf("name is required")
+	case params.Protocol != "tcp" && params.Protocol != "udp":
+		return fmt.Errorf("protocol must be tcp or udp")
 	case params.ServerHost == "":
 		return fmt.Errorf("server_host is required")
 	case !validPort(params.ServerPort):
@@ -602,6 +610,7 @@ func idSchema() map[string]any {
 func tunnelConnectionCreateSchema() map[string]any {
 	return objectSchema(map[string]any{
 		"name":          map[string]any{"type": "string"},
+		"protocol":      map[string]any{"type": "string", "enum": []string{"tcp", "udp"}, "default": "tcp"},
 		"server_host":   map[string]any{"type": "string"},
 		"server_port":   map[string]any{"type": "integer", "minimum": 0, "maximum": 65535, "description": "0 or omitted uses server_defaults.control_port"},
 		"data_port":     map[string]any{"type": "integer", "minimum": 0, "maximum": 65535, "description": "0 or omitted uses server_defaults.data_port"},

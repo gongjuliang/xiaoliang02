@@ -289,6 +289,28 @@ func TestClientMCPCreatesAndDeletesTunnelConnection(t *testing.T) {
 	}
 }
 
+func TestClientMCPCreatesUDPTunnelConnection(t *testing.T) {
+	router, database := setupClientMCPRouter(t)
+	defer database.Close()
+
+	rec := callClientMCP(t, router, "client-mcp-token", "client.create_tunnel_connection", map[string]any{
+		"name":          "mcp-udp-connection",
+		"protocol":      "udp",
+		"server_host":   "10.0.0.20",
+		"client_secret": "must-not-leak",
+		"local_host":    "127.0.0.1",
+		"local_port":    8090,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var created model.ServerConnection
+	decodeMCPToolStructured(t, rec, &created)
+	if created.Protocol != "udp" {
+		t.Fatalf("protocol=%q want udp", created.Protocol)
+	}
+}
+
 func TestClientMCPRejectsInvalidTunnelConnectionCreateParams(t *testing.T) {
 	router, database := setupClientMCPRouter(t)
 	defer database.Close()

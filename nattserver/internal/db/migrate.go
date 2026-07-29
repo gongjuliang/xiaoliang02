@@ -255,6 +255,51 @@ BEGIN
 END;
 `,
 	},
+	{
+		Version: 5,
+		Name:    "tunnel_protocol_port_uniqueness",
+		SQL: `
+PRAGMA defer_foreign_keys = ON;
+
+CREATE TABLE tunnels_v5 (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	name TEXT NOT NULL,
+	protocol TEXT NOT NULL DEFAULT 'tcp',
+	remote_host TEXT NOT NULL DEFAULT '0.0.0.0',
+	remote_port INTEGER NOT NULL,
+	status TEXT NOT NULL DEFAULT 'stopped',
+	auto_start INTEGER NOT NULL DEFAULT 0,
+	last_error TEXT,
+	remark TEXT,
+	created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+	updated_at DATETIME NOT NULL DEFAULT (datetime('now')),
+	client_id INTEGER NOT NULL DEFAULT 0,
+	UNIQUE(protocol, remote_port)
+);
+
+INSERT INTO tunnels_v5(
+	id, name, protocol, remote_host, remote_port, status, auto_start,
+	last_error, remark, created_at, updated_at, client_id
+)
+SELECT
+	id, name, COALESCE(NULLIF(protocol, ''), 'tcp'), remote_host, remote_port,
+	status, auto_start, last_error, remark, created_at, updated_at,
+	COALESCE(client_id, 0)
+FROM tunnels;
+
+DROP TABLE tunnels;
+ALTER TABLE tunnels_v5 RENAME TO tunnels;
+
+CREATE INDEX IF NOT EXISTS idx_tunnels_client_id ON tunnels(client_id);
+CREATE TRIGGER IF NOT EXISTS trg_tunnels_updated_at
+AFTER UPDATE ON tunnels
+FOR EACH ROW
+WHEN NEW.updated_at = OLD.updated_at
+BEGIN
+	UPDATE tunnels SET updated_at = datetime('now') WHERE id = OLD.id;
+END;
+`,
+	},
 }
 
 // Migrate 执行数据库迁移：创建schema_migrations表→逐版本应用未执行的迁移→处理旧哈希格式。

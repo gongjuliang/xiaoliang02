@@ -40,7 +40,10 @@ const (
 	// TypeDataOpen 打开数据通道：通知客户端为指定隧道建立新的数据连接。
 	TypeDataOpen = "data_open"
 	// TypeDataBind 数据绑定：外部用户连入时携带密钥进行身份绑定。
-	TypeDataBind = "data_bind"
+	TypeDataBind   = "data_bind"
+	TypeUDPBind    = "udp_bind"
+	TypeUDPBindAck = "udp_bind_ack"
+	TypeUDPPacket  = "udp_packet"
 	// TypeDataClose 关闭数据连接：通知对端关闭指定的数据通道。
 	TypeDataClose = "data_close"
 	// TypeError 错误消息：用于向对端报告协议层错误。
@@ -94,6 +97,7 @@ type ProtocolError struct {
 
 // AuthRequest 认证请求的Payload：客户端携带密钥和基本信息向服务端认证。
 type AuthRequest struct {
+	TunnelProtocol string `json:"tunnel_protocol,omitempty"`
 	// ClientSecret 客户端密钥（明文），服务端与数据库中的哈希值比对验证。
 	ClientSecret string `json:"client_secret"`
 	// ClientName 客户端名称，用于展示和管理。
@@ -108,6 +112,7 @@ type AuthRequest struct {
 
 // AuthResponse 认证响应的Payload：服务端告知客户端认证结果和隧道配置。
 type AuthResponse struct {
+	TunnelProtocol string `json:"tunnel_protocol,omitempty"`
 	// Success 认证是否成功。
 	Success bool `json:"success"`
 	// ClientID 认证成功后分配的客户端ID。
@@ -158,6 +163,14 @@ type DataOpen struct {
 type DataBind struct {
 	// ClientSecret 隧道访问密钥，用于验证外部用户的访问权限。
 	ClientSecret string `json:"client_secret"`
+}
+
+type UDPBind struct {
+	ClientSecret string `json:"client_secret"`
+}
+
+type UDPPacket struct {
+	Data []byte `json:"data"`
 }
 
 // DataClose 数据连接关闭Payload：通知对端关闭指定数据连接。

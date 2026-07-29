@@ -34,7 +34,7 @@ func TestRouterServesEmbeddedFrontend(t *testing.T) {
 	assertContainsAll(t, index, "小良内网穿透-服务端", "服务端控制台", "sessionStorage", "natt_server_active_view")
 	assertNotContainsAny(t, index, "NATT Server")
 
-	for _, path := range []string{"/login.html", "/dashboard.html", "/tunnels.html", "/config.html", "/mcp.html", "/audit.html"} {
+	for _, path := range []string{"/login.html", "/dashboard.html", "/tunnels.html", "/udp-tunnels.html", "/config.html", "/mcp.html", "/audit.html"} {
 		body := getFrontend(t, router, path)
 		if !strings.Contains(body, "NATT.requireAuth()") && !strings.Contains(body, `id="content"`) && !strings.Contains(body, "loginForm") {
 			t.Fatalf("%s does not look like a module page: %s", path, body)
@@ -43,7 +43,10 @@ func TestRouterServesEmbeddedFrontend(t *testing.T) {
 	_ = getFrontend(t, router, "/agreement.html")
 
 	tunnels := getFrontend(t, router, "/tunnels.html")
-	assertContainsAll(t, tunnels, "t.secret", "secret_hint", "maskSecret", "show-secret", "renderDetailText", "show-detail", "formatBytes", "bytes_in", "bytes_out", "last_error", `id="as" type="checkbox" checked`, "auto_start")
+	assertContainsAll(t, tunnels, "t.secret", "secret_hint", "maskSecret", "show-secret", "renderDetailText", "show-detail", "formatBytes", "bytes_in", "bytes_out", "last_error", `id="as" type="checkbox" checked`, "auto_start", "protocol=tcp", `protocol: "tcp"`)
+	udpTunnels := getFrontend(t, router, "/udp-tunnels.html")
+	assertContainsAll(t, udpTunnels, "UDP 隧道", "protocol=udp", `protocol: "udp"`, "udp")
+	assertContainsAll(t, index, "udp-tunnels.html", "data-view=\"udp-tunnels\"")
 
 	configPage := getFrontend(t, router, "/config.html")
 	assertContainsAll(t, configPage, "renderReadonlyConfig", "hot_reload", "currentValue", "placeholder")

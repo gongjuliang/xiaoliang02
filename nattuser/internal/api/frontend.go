@@ -48,6 +48,7 @@ func registerFrontendRoutes(router *gin.Engine) {
 	}{
 		{Path: "/dashboard.html", Template: "dashboard.html"},
 		{Path: "/tunnels.html", Template: "tunnels.html"},
+		{Path: "/udp-tunnels.html", Template: "udp-tunnels.html"},
 		{Path: "/config.html", Template: "config.html"},
 		{Path: "/mcp.html", Template: "mcp.html"},
 		{Path: "/audit.html", Template: "audit.html"},

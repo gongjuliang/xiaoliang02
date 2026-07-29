@@ -57,6 +57,7 @@ type AppConfig struct {
 
 // HTTPConfig HTTP服务配置，包含监听地址、端口、HTTPS和超时设置。
 type HTTPConfig struct {
+	IPv6Host               string `yaml:"ipv6_host" json:"ipv6_host"`
 	Host                   string `yaml:"host" json:"host"`                                         // 监听地址
 	Port                   int    `yaml:"port" json:"port"`                                         // 监听端口（默认25520）
 	HTTPSEnabled           bool   `yaml:"https_enabled" json:"https_enabled"`                       // 是否启用HTTPS
@@ -181,6 +182,7 @@ func Default() *Config {
 			Environment: "production",
 		},
 		HTTP: HTTPConfig{
+			IPv6Host:               "::",
 			Host:                   "0.0.0.0",
 			Port:                   25520,
 			HTTPSEnabled:           false,

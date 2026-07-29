@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"nattuser/internal/config"
@@ -23,6 +24,7 @@ type Server struct {
 	httpsEnabled    bool
 	certFile        string
 	keyFile         string
+	ipv6Host        string
 }
 
 func New(cfg config.HTTPConfig, handler http.Handler, log *logger.Logger) *Server {
@@ -39,6 +41,7 @@ func New(cfg config.HTTPConfig, handler http.Handler, log *logger.Logger) *Serve
 		httpsEnabled:    cfg.HTTPSEnabled,
 		certFile:        cfg.CertFile,
 		keyFile:         cfg.KeyFile,
+		ipv6Host:        cfg.IPv6Host,
 	}
 }
 
@@ -48,7 +51,23 @@ func (s *Server) Run(ctx context.Context) error {
 			return err
 		}
 	}
-	errCh := make(chan error, 1)
+	host, portText, err := net.SplitHostPort(s.server.Addr)
+	if err != nil {
+		return err
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		return err
+	}
+	listeners, ipv6Err, err := listenTCPDual(host, s.ipv6Host, port)
+	if err != nil {
+		return fmt.Errorf("Web IPv4监听失败: %w", err)
+	}
+	defer closeListeners(listeners)
+	if ipv6Err != nil && s.log != nil {
+		s.log.Errorf("IPv6 Web监听不可用，已继续使用IPv4: %v", ipv6Err)
+	}
+	errCh := make(chan error, len(listeners))
 	go func() {
 		if s.log != nil {
 			scheme := "http"
@@ -66,9 +85,9 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 		var err error
 		if s.httpsEnabled {
-			err = s.server.ListenAndServeTLS(s.certFile, s.keyFile)
+			err = s.server.ServeTLS(listeners[0], s.certFile, s.keyFile)
 		} else {
-			err = s.server.ListenAndServe()
+			err = s.server.Serve(listeners[0])
 		}
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
@@ -76,6 +95,21 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 		errCh <- nil
 	}()
+	for _, listener := range listeners[1:] {
+		go func(listener net.Listener) {
+			var serveErr error
+			if s.httpsEnabled {
+				serveErr = s.server.ServeTLS(listener, s.certFile, s.keyFile)
+			} else {
+				serveErr = s.server.Serve(listener)
+			}
+			if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+				errCh <- serveErr
+				return
+			}
+			errCh <- nil
+		}(listener)
+	}
 
 	select {
 	case <-ctx.Done():

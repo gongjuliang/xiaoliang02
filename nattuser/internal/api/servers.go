@@ -28,6 +28,7 @@ type ServerHandler struct {
 }
 
 type serverConnectionRequest struct {
+	Protocol     string `json:"protocol"`
 	Name         string `json:"name" binding:"required"`
 	ServerHost   string `json:"server_host"`
 	ServerPort   int    `json:"server_port"`
@@ -41,6 +42,7 @@ type serverConnectionRequest struct {
 
 type serverConnectionResponse struct {
 	ID           int64                        `json:"id"`
+	Protocol     string                       `json:"protocol"`
 	Name         string                       `json:"name"`
 	ServerHost   string                       `json:"server_host"`
 	ServerPort   int                          `json:"server_port"`
@@ -81,7 +83,11 @@ func (h *ServerHandler) list(c *gin.Context) {
 		return
 	}
 	page.Normalize()
-	connections, total, err := db.ListServerConnections(c.Request.Context(), h.database, page.Limit(), page.Offset())
+	protocol, ok := parseTunnelProtocolQuery(c)
+	if !ok {
+		return
+	}
+	connections, total, err := db.ListServerConnectionsByProtocol(c.Request.Context(), h.database, protocol, page.Limit(), page.Offset())
 	if err != nil {
 		h.writeDBError(c, err, "list server connections failed")
 		return
@@ -95,6 +101,7 @@ func (h *ServerHandler) create(c *gin.Context) {
 		return
 	}
 	connection, err := db.CreateServerConnection(c.Request.Context(), h.database, db.CreateServerConnectionParams{
+		Protocol:     req.Protocol,
 		Name:         req.Name,
 		ServerHost:   req.ServerHost,
 		ServerPort:   req.ServerPort,
@@ -123,6 +130,7 @@ func (h *ServerHandler) update(c *gin.Context) {
 		return
 	}
 	connection, err := db.UpdateServerConnection(c.Request.Context(), h.database, id, db.UpdateServerConnectionParams{
+		Protocol:     req.Protocol,
 		Name:         req.Name,
 		ServerHost:   req.ServerHost,
 		ServerPort:   req.ServerPort,
@@ -182,6 +190,7 @@ func (h *ServerHandler) bindAndValidate(c *gin.Context, req *serverConnectionReq
 		return false
 	}
 	req.Name = strings.TrimSpace(req.Name)
+	req.Protocol = strings.TrimSpace(strings.ToLower(req.Protocol))
 	req.ServerHost = strings.TrimSpace(req.ServerHost)
 	req.ClientSecret = strings.TrimSpace(req.ClientSecret)
 	req.LocalHost = strings.TrimSpace(req.LocalHost)
@@ -191,10 +200,15 @@ func (h *ServerHandler) bindAndValidate(c *gin.Context, req *serverConnectionReq
 	if req.DataPort == 0 {
 		req.DataPort = h.defaults.DataPort
 	}
+	if req.Protocol == "" {
+		req.Protocol = "tcp"
+	}
 
 	switch {
 	case req.Name == "":
 		Fail(c, http.StatusBadRequest, CodeBadRequest, "name 为必填项")
+	case !isSupportedTunnelProtocol(req.Protocol):
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "protocol 只能选择 tcp 或 udp")
 	case req.ServerHost == "":
 		Fail(c, http.StatusBadRequest, CodeBadRequest, "server_host 为必填项")
 	case !validPort(req.ServerPort):
@@ -239,6 +253,7 @@ func serverConnectionResponses(connections []model.ServerConnection) []serverCon
 func serverConnectionResponseFrom(connection model.ServerConnection) serverConnectionResponse {
 	return serverConnectionResponse{
 		ID:           connection.ID,
+		Protocol:     connection.Protocol,
 		Name:         connection.Name,
 		ServerHost:   connection.ServerHost,
 		ServerPort:   connection.ServerPort,
@@ -254,6 +269,22 @@ func serverConnectionResponseFrom(connection model.ServerConnection) serverConne
 		CreatedAt:    connection.CreatedAt,
 		UpdatedAt:    connection.UpdatedAt,
 	}
+}
+
+func parseTunnelProtocolQuery(c *gin.Context) (string, bool) {
+	value := strings.TrimSpace(strings.ToLower(c.Query("protocol")))
+	if value == "" {
+		return "", true
+	}
+	if !isSupportedTunnelProtocol(value) {
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "protocol 只能选择 tcp 或 udp")
+		return "", false
+	}
+	return value, true
+}
+
+func isSupportedTunnelProtocol(value string) bool {
+	return value == "tcp" || value == "udp"
 }
 
 func parseIDParam(c *gin.Context) (int64, bool) {

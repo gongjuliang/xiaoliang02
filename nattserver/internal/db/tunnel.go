@@ -40,12 +40,23 @@ type UpdateTunnelParams struct {
 
 // ListTunnels 分页查询隧道列表（LEFT JOIN tunnel_keys和traffic_stats获取密钥和流量数据）。
 func ListTunnels(ctx context.Context, database *sql.DB, clientID int64, limit int, offset int) ([]model.Tunnel, int64, error) {
+	return ListTunnelsByProtocol(ctx, database, clientID, "", limit, offset)
+}
+
+func ListTunnelsByProtocol(ctx context.Context, database *sql.DB, clientID int64, tunnelProtocol model.TunnelProtocol, limit int, offset int) ([]model.Tunnel, int64, error) {
+	where := ""
+	args := make([]any, 0, 3)
+	if tunnelProtocol != "" {
+		where = "WHERE t.protocol = ?"
+		args = append(args, tunnelProtocol)
+	}
 	var total int64
-	if err := database.QueryRowContext(ctx, "SELECT COUNT(1) FROM tunnels").Scan(&total); err != nil {
+	countQuery := "SELECT COUNT(1) FROM tunnels t " + where
+	if err := database.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count tunnels: %w", err)
 	}
 
-	rows, err := database.QueryContext(ctx, `
+	query := `
 SELECT t.id, t.name, COALESCE(t.client_id, 0), t.protocol, t.remote_host, t.remote_port, t.status, t.auto_start, t.last_error,
        COALESCE(k.secret_plain, ''), COALESCE(k.secret_hint, ''),
        COALESCE(ts.bytes_in, 0), COALESCE(ts.bytes_out, 0),
@@ -53,8 +64,11 @@ SELECT t.id, t.name, COALESCE(t.client_id, 0), t.protocol, t.remote_host, t.remo
 FROM tunnels t
 LEFT JOIN tunnel_keys k ON k.tunnel_id = t.id
 LEFT JOIN traffic_stats ts ON ts.tunnel_id = t.id
+` + where + `
 ORDER BY t.id DESC
-LIMIT ? OFFSET ?;`, limit, offset)
+LIMIT ? OFFSET ?;`
+	args = append(args, limit, offset)
+	rows, err := database.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list tunnels: %w", err)
 	}

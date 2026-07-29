@@ -174,6 +174,13 @@ END;
 ALTER TABLE tunnel_connections ADD COLUMN remote_port INTEGER NOT NULL DEFAULT 0;
 `,
 	},
+	{
+		Version: 6,
+		Name:    "tunnel_connection_protocol",
+		SQL: `
+ALTER TABLE tunnel_connections ADD COLUMN protocol TEXT NOT NULL DEFAULT 'tcp';
+`,
+	},
 }
 
 func Migrate(ctx context.Context, database *sql.DB, log *logger.Logger) error {

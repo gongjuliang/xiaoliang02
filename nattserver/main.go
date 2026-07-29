@@ -97,7 +97,7 @@ func main() {
 	defer database.Close()
 
 	// 第九步：创建控制通道服务器（管理客户端连接、隧道和数据转发）
-	controlServer := control.NewServer(cfg.Protocol, database, log)
+	controlServer := control.NewServer(cfg.Protocol, database, log, cfg.Tunnel)
 	// 第十步：注册HTTP API路由（含运行时控制能力）
 	router := api.NewRouterWithRuntime(cfg, database, log, controlServer)
 	// 第十一步：创建HTTP服务器
@@ -236,9 +236,9 @@ func buildServerRunners(httpRunner func(context.Context) error, controlRunner fu
 // 返回值：端口检测项列表。
 func startupPortChecks(cfg *config.Config) []startup.PortCheck {
 	return []startup.PortCheck{
-		{Name: "HTTP管理端口", Host: cfg.HTTP.Host, Port: cfg.HTTP.Port},                   // Web后台管理端口（默认25510）
-		{Name: "控制端口", Host: cfg.Protocol.ControlHost, Port: cfg.Protocol.ControlPort}, // 控制通道端口（默认25511）
-		{Name: "数据端口", Host: cfg.Protocol.DataHost, Port: cfg.Protocol.DataPort},       // 数据通道端口（默认25512）
+		{Name: "HTTP管理端口", Host: cfg.HTTP.Host, IPv6Host: cfg.HTTP.IPv6Host, Port: cfg.HTTP.Port},
+		{Name: "控制端口", Host: cfg.Protocol.ControlHost, IPv6Host: cfg.Protocol.ControlIPv6Host, Port: cfg.Protocol.ControlPort},
+		{Name: "数据端口", Host: cfg.Protocol.DataHost, IPv6Host: cfg.Protocol.DataIPv6Host, Port: cfg.Protocol.DataPort},
 	}
 }
 

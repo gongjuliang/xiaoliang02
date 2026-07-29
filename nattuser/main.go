@@ -207,7 +207,7 @@ func buildServiceRunners(httpRunner func(context.Context) error, controlRunner f
 // 返回值：端口检测项列表。
 func startupPortChecks(cfg *config.Config) []startup.PortCheck {
 	return []startup.PortCheck{
-		{Name: "HTTP管理端口", Host: cfg.HTTP.Host, Port: cfg.HTTP.Port},
+		{Name: "HTTP管理端口", Host: cfg.HTTP.Host, IPv6Host: cfg.HTTP.IPv6Host, Port: cfg.HTTP.Port},
 	}
 }
 

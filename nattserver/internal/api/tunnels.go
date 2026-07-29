@@ -99,7 +99,11 @@ func (h *TunnelHandler) list(c *gin.Context) {
 		return
 	}
 	page.Normalize()
-	tunnels, total, err := db.ListTunnels(c.Request.Context(), h.database, 0, page.Limit(), page.Offset())
+	protocol, ok := parseTunnelProtocolQuery(c)
+	if !ok {
+		return
+	}
+	tunnels, total, err := db.ListTunnelsByProtocol(c.Request.Context(), h.database, 0, protocol, page.Limit(), page.Offset())
 	if err != nil {
 		h.writeDBError(c, err, "list tunnels failed")
 		return
@@ -116,7 +120,7 @@ func (h *TunnelHandler) create(c *gin.Context) {
 	}
 	tunnel, err := db.CreateTunnel(c.Request.Context(), h.database, db.CreateTunnelParams{
 		Name:       req.Name,
-		Protocol:   model.TunnelProtocolTCP,
+		Protocol:   model.TunnelProtocol(req.Protocol),
 		RemoteHost: req.RemoteHost,
 		RemotePort: req.RemotePort,
 		AutoStart:  req.AutoStart,
@@ -154,7 +158,7 @@ func (h *TunnelHandler) update(c *gin.Context) {
 	}
 	tunnel, err := db.UpdateTunnel(c.Request.Context(), h.database, id, db.UpdateTunnelParams{
 		Name:       req.Name,
-		Protocol:   model.TunnelProtocolTCP,
+		Protocol:   model.TunnelProtocol(req.Protocol),
 		RemoteHost: req.RemoteHost,
 		RemotePort: req.RemotePort,
 		AutoStart:  req.AutoStart,
@@ -314,8 +318,8 @@ func (h *TunnelHandler) bindAndValidateTunnelRequest(c *gin.Context, req *tunnel
 	switch {
 	case req.Name == "":
 		Fail(c, http.StatusBadRequest, CodeBadRequest, "name 为必填项")
-	case req.Protocol != string(model.TunnelProtocolTCP):
-		Fail(c, http.StatusBadRequest, CodeBadRequest, "仅支持 tcp 协议")
+	case !isSupportedTunnelProtocol(req.Protocol):
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "protocol 只能选择 tcp 或 udp")
 	case !validPort(req.RemotePort):
 		Fail(c, http.StatusBadRequest, CodeBadRequest, "remote_port 必须在 1 到 65535 之间")
 	case req.RemotePort < h.cfg.RemotePortMin || req.RemotePort > h.cfg.RemotePortMax:
@@ -324,6 +328,22 @@ func (h *TunnelHandler) bindAndValidateTunnelRequest(c *gin.Context, req *tunnel
 		return true
 	}
 	return false
+}
+
+func parseTunnelProtocolQuery(c *gin.Context) (model.TunnelProtocol, bool) {
+	value := strings.TrimSpace(strings.ToLower(c.Query("protocol")))
+	if value == "" {
+		return "", true
+	}
+	if !isSupportedTunnelProtocol(value) {
+		Fail(c, http.StatusBadRequest, CodeBadRequest, "protocol 只能选择 tcp 或 udp")
+		return "", false
+	}
+	return model.TunnelProtocol(value), true
+}
+
+func isSupportedTunnelProtocol(value string) bool {
+	return value == string(model.TunnelProtocolTCP) || value == string(model.TunnelProtocolUDP)
 }
 
 func (h *TunnelHandler) writeDBError(c *gin.Context, err error, fallback string) {

@@ -15,7 +15,7 @@ D:\2025Code\ai\natt
 - `nattserver/internal/config`: default config, JSON/YAML parsing, validation.
 - `nattserver/internal/startup`: first-run initialization Web, HTTPS cert generation, port checks.
 - `nattserver/internal/api`: Gin REST routes, frontend routes, auth, clients, tunnels, config, audit, MCP config.
-- `nattserver/internal/control`: control/data TCP runtime, tunnel lifecycle, heartbeats, tunnel occupancy, `tunnel_stop`.
+- `nattserver/internal/control`: dual-stack control/data runtime, TCP and UDP tunnel lifecycle, heartbeats, tunnel occupancy, `tunnel_stop`, UDP public-session relay.
 - `nattserver/internal/protocol`: protocol message types and frame read/write.
 - `nattserver/internal/db`: SQLite migration and repositories.
 - `nattserver/internal/auth`: JWT, SM2, SM3 password/secret hashing, secret generation.
@@ -28,7 +28,7 @@ D:\2025Code\ai\natt
 - `nattuser/internal/config`: default config, JSON/YAML parsing, validation.
 - `nattuser/internal/startup`: first-run initialization Web and runtime directory creation.
 - `nattuser/internal/api`: Gin REST routes, frontend routes, auth, tunnel connections, local tunnels, config, audit, MCP config.
-- `nattuser/internal/control`: server control connection, reconnect, data bind, local TCP forwarding, `tunnel_stop` handling.
+- `nattuser/internal/control`: server control connection, reconnect, TCP data binding, UDP relay/local UDP sessions, `tunnel_stop` handling.
 - `nattuser/internal/protocol`: protocol message types and frame read/write.
 - `nattuser/internal/db`: SQLite migration and repositories.
 - `nattuser/internal/auth`: JWT, SM2, SM3 password hashing, secret helpers.
@@ -51,6 +51,9 @@ D:\2025Code\ai\natt
 - Server owns public listener fields: remote host, remote port, status, auto start, secret, traffic.
 - Client owns local target fields: server host, control port, data port, server tunnel secret, local host, local port.
 - One server tunnel ID may be occupied by only one active client connection at a time.
+- Tunnel protocol is persisted as `tcp` or `udp`; server/client list endpoints accept `protocol=tcp|udp`, and the old TCP pages always request `protocol=tcp`.
+- Server uniqueness is `(protocol, remote_port)`, allowing one TCP and one UDP listener to share a port number.
+- Listeners use required IPv4 plus optional IPv6. Configuration defaults to `0.0.0.0` and `::`; IPv6 bind failure logs a Chinese warning without disabling IPv4.
 - Starting a server tunnel while its client is offline should move it to `waiting`, set `auto_start=true`, clear `last_error`, and avoid binding the public port until reconnect.
 - If a running tunnel loses its control connection, the server writes `last_error=隧道控制连接已离线`; only this error is automatically recovered when the same client reconnects or sends heartbeat.
 - `heartbeat_ack` carries `tunnel_status`, `last_error`, and `remote_port`; the client uses it as a fallback to sync server `stopped`/`error` when it misses a command.
@@ -67,10 +70,17 @@ D:\2025Code\ai\natt
 该连接正在占用，不得连接
 ```
 
+### UDP Relay Rules
+
+- Server UDP runtime is `nattserver/internal/control/udp.go`; client UDP runtime is `nattuser/internal/control/udp.go`.
+- The client opens a long-lived TCP data channel, sends `udp_bind`, waits for `udp_bind_ack`, then receives and sends `udp_packet` frames.
+- Each public UDP source address is a session. Both sides expire idle sessions after 60 seconds by default; a tunnel permits at most 1024 sessions and a packet may not exceed 65507 bytes.
+- Stopping/deleting a tunnel or losing the relay closes listeners and session mappings. A lost relay writes a Chinese UDP relay offline status detail; the client reconnects the relay while control remains online.
+
 ## Web UI Notes
 
 - Frontend files are embedded under `Web/EmbedFiles`.
-- Pages are split into `login.html`, `index.html`, `dashboard.html`, `tunnels.html`, `config.html`, `audit.html`, and `mcp.html`.
+- Pages are split into `login.html`, `index.html`, `dashboard.html`, `tunnels.html` (TCP), `udp-tunnels.html` (UDP), `config.html`, `audit.html`, and `mcp.html`.
 - The active menu is stored in `sessionStorage`.
 - Long status details are truncated in tables and shown fully in a popup.
 - Secrets are masked by default and revealed by a button.
@@ -122,7 +132,7 @@ Client tools:
 - `client.list_tunnels`
 - `client.get_network_status`
 
-`client.create_tunnel_connection` requires `name`, `server_host`, `client_secret`, `local_host`, and `local_port`. Omitted or zero `server_port` / `data_port` use the client's `server_defaults` config.
+`client.create_tunnel_connection` requires `name`, `server_host`, `client_secret`, `local_host`, and `local_port`. Its optional `protocol` is `tcp` or `udp` and defaults to `tcp`. Omitted or zero `server_port` / `data_port` use the client's `server_defaults` config. `server.create_tunnel` also accepts `protocol` and defaults to `tcp`.
 
 ## Troubleshooting
 

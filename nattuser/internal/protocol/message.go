@@ -23,6 +23,9 @@ const (
 	TypeTunnelStatus = "tunnel_status"
 	TypeDataOpen     = "data_open"
 	TypeDataBind     = "data_bind"
+	TypeUDPBind      = "udp_bind"
+	TypeUDPBindAck   = "udp_bind_ack"
+	TypeUDPPacket    = "udp_packet"
 	TypeDataClose    = "data_close"
 	TypeError        = "error"
 )
@@ -55,6 +58,7 @@ type ProtocolError struct {
 }
 
 type AuthRequest struct {
+	TunnelProtocol  string         `json:"tunnel_protocol,omitempty"`
 	ClientSecret    string         `json:"client_secret"`
 	ClientName      string         `json:"client_name"`
 	ClientVersion   string         `json:"client_version"`
@@ -63,6 +67,7 @@ type AuthRequest struct {
 }
 
 type AuthResponse struct {
+	TunnelProtocol           string `json:"tunnel_protocol,omitempty"`
 	Success                  bool   `json:"success"`
 	ClientID                 int64  `json:"client_id,omitempty"`
 	TunnelID                 int64  `json:"tunnel_id,omitempty"`
@@ -92,6 +97,14 @@ type DataOpen struct {
 
 type DataBind struct {
 	ClientSecret string `json:"client_secret"`
+}
+
+type UDPBind struct {
+	ClientSecret string `json:"client_secret"`
+}
+
+type UDPPacket struct {
+	Data []byte `json:"data"`
 }
 
 type DataClose struct {

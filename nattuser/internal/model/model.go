@@ -39,6 +39,7 @@ type User struct {
 // TunnelConnection 隧道连接模型，定义客户端到nattserver的一条隧道连接配置。
 // 包含服务端地址、端口、密钥、内网目标等信息。
 type TunnelConnection struct {
+	Protocol     string                 `json:"protocol"`
 	ID           int64                  `json:"id"`          // 连接唯一标识
 	Name         string                 `json:"name"`        // 连接名称
 	ServerHost   string                 `json:"server_host"` // 服务端地址

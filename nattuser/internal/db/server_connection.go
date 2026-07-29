@@ -14,6 +14,7 @@ import (
 )
 
 type CreateServerConnectionParams struct {
+	Protocol     string
 	Name         string
 	ServerHost   string
 	ServerPort   int
@@ -27,6 +28,7 @@ type CreateServerConnectionParams struct {
 }
 
 type UpdateServerConnectionParams struct {
+	Protocol     string
 	Name         string
 	ServerHost   string
 	ServerPort   int
@@ -40,16 +42,30 @@ type UpdateServerConnectionParams struct {
 }
 
 func ListServerConnections(ctx context.Context, database *sql.DB, limit int, offset int) ([]model.ServerConnection, int64, error) {
+	return ListServerConnectionsByProtocol(ctx, database, "", limit, offset)
+}
+
+func ListServerConnectionsByProtocol(ctx context.Context, database *sql.DB, tunnelProtocol string, limit int, offset int) ([]model.ServerConnection, int64, error) {
+	where := ""
+	args := make([]any, 0, 3)
+	if strings.TrimSpace(tunnelProtocol) != "" {
+		where = "WHERE protocol = ?"
+		args = append(args, tunnelProtocol)
+	}
 	var total int64
-	if err := database.QueryRowContext(ctx, "SELECT COUNT(1) FROM tunnel_connections").Scan(&total); err != nil {
+	countQuery := "SELECT COUNT(1) FROM tunnel_connections " + where
+	if err := database.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count server connections: %w", err)
 	}
 
-	rows, err := database.QueryContext(ctx, `
-SELECT id, name, server_host, server_port, data_port, remote_port, use_tls, client_secret, local_host, local_port, status, auto_start, last_error, remark, created_at, updated_at
+	query := `
+SELECT id, protocol, name, server_host, server_port, data_port, remote_port, use_tls, client_secret, local_host, local_port, status, auto_start, last_error, remark, created_at, updated_at
 FROM tunnel_connections
+` + where + `
 ORDER BY id DESC
-LIMIT ? OFFSET ?;`, limit, offset)
+LIMIT ? OFFSET ?;`
+	args = append(args, limit, offset)
+	rows, err := database.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list server connections: %w", err)
 	}
@@ -71,7 +87,7 @@ LIMIT ? OFFSET ?;`, limit, offset)
 
 func ListControlServerConnections(ctx context.Context, database *sql.DB) ([]model.ServerConnection, error) {
 	rows, err := database.QueryContext(ctx, `
-SELECT id, name, server_host, server_port, data_port, remote_port, use_tls, client_secret, local_host, local_port, status, auto_start, last_error, remark, created_at, updated_at
+SELECT id, protocol, name, server_host, server_port, data_port, remote_port, use_tls, client_secret, local_host, local_port, status, auto_start, last_error, remark, created_at, updated_at
 FROM tunnel_connections
 WHERE auto_start = 1 OR status IN ('connecting', 'connected', 'error')
 ORDER BY id ASC;`)
@@ -96,7 +112,7 @@ ORDER BY id ASC;`)
 
 func GetServerConnectionByID(ctx context.Context, database *sql.DB, id int64) (model.ServerConnection, error) {
 	row := database.QueryRowContext(ctx, `
-SELECT id, name, server_host, server_port, data_port, remote_port, use_tls, client_secret, local_host, local_port, status, auto_start, last_error, remark, created_at, updated_at
+SELECT id, protocol, name, server_host, server_port, data_port, remote_port, use_tls, client_secret, local_host, local_port, status, auto_start, last_error, remark, created_at, updated_at
 FROM tunnel_connections
 WHERE id = ?;`, id)
 	connection, err := scanServerConnection(row)
@@ -110,9 +126,11 @@ WHERE id = ?;`, id)
 }
 
 func CreateServerConnection(ctx context.Context, database *sql.DB, params CreateServerConnectionParams) (model.ServerConnection, error) {
+	params.Protocol = normalizeTunnelProtocol(params.Protocol)
 	result, err := database.ExecContext(ctx, `
-INSERT INTO tunnel_connections(name, server_host, server_port, data_port, remote_port, use_tls, client_secret, local_host, local_port, status, auto_start, remark)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', ?, ?);`,
+	INSERT INTO tunnel_connections(protocol, name, server_host, server_port, data_port, remote_port, use_tls, client_secret, local_host, local_port, status, auto_start, remark)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', ?, ?);`,
+		params.Protocol,
 		params.Name,
 		params.ServerHost,
 		params.ServerPort,
@@ -136,10 +154,12 @@ VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', ?, ?);`,
 }
 
 func UpdateServerConnection(ctx context.Context, database *sql.DB, id int64, params UpdateServerConnectionParams) (model.ServerConnection, error) {
+	params.Protocol = normalizeTunnelProtocol(params.Protocol)
 	result, err := database.ExecContext(ctx, `
 UPDATE tunnel_connections
-SET name = ?, server_host = ?, server_port = ?, data_port = ?, remote_port = ?, use_tls = ?, client_secret = ?, local_host = ?, local_port = ?, auto_start = ?, remark = ?, last_error = NULL
+SET protocol = ?, name = ?, server_host = ?, server_port = ?, data_port = ?, remote_port = ?, use_tls = ?, client_secret = ?, local_host = ?, local_port = ?, auto_start = ?, remark = ?, last_error = NULL
 WHERE id = ?;`,
+		params.Protocol,
 		params.Name,
 		params.ServerHost,
 		params.ServerPort,
@@ -289,6 +309,7 @@ func scanServerConnection(scanner serverConnectionScanner) (model.ServerConnecti
 	var remark sql.NullString
 	err := scanner.Scan(
 		&connection.ID,
+		&connection.Protocol,
 		&connection.Name,
 		&connection.ServerHost,
 		&connection.ServerPort,
@@ -309,9 +330,17 @@ func scanServerConnection(scanner serverConnectionScanner) (model.ServerConnecti
 		return model.ServerConnection{}, err
 	}
 	connection.AutoStart = autoStart == 1
+	connection.Protocol = normalizeTunnelProtocol(connection.Protocol)
 	connection.LastError = nullableString(lastError)
 	connection.Remark = nullableString(remark)
 	return connection, nil
+}
+
+func normalizeTunnelProtocol(value string) string {
+	if strings.EqualFold(strings.TrimSpace(value), "udp") {
+		return "udp"
+	}
+	return "tcp"
 }
 
 func nullableString(value sql.NullString) string {

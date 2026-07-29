@@ -20,6 +20,8 @@ type PortCheck struct {
 	Name string
 	// Host 监听主机地址（如"0.0.0.0"或"127.0.0.1"）。
 	Host string
+	// IPv6Host is optional. An unavailable IPv6 stack must not prevent IPv4 startup.
+	IPv6Host string
 	// Port 监听端口号。
 	Port int
 }
@@ -49,7 +51,7 @@ func CheckPorts(checks []PortCheck) error {
 		seen[key] = struct{}{}
 
 		// 尝试在指定主机和端口上创建TCP监听器
-		listener, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(check.Port)))
+		listener, err := net.Listen("tcp4", net.JoinHostPort(host, strconv.Itoa(check.Port)))
 		if err != nil {
 			// 监听失败说明端口已被占用
 			return fmt.Errorf("%d端口被占用", check.Port)
@@ -57,6 +59,15 @@ func CheckPorts(checks []PortCheck) error {
 		// 监听成功后立即关闭监听器，释放端口使用权
 		if err := listener.Close(); err != nil {
 			return fmt.Errorf("关闭端口检查监听失败: %w", err)
+		}
+
+		ipv6Host := strings.Trim(strings.TrimSpace(check.IPv6Host), "[]")
+		if ipv6Host == "" {
+			continue
+		}
+		listener6, err := net.Listen("tcp6", net.JoinHostPort(ipv6Host, strconv.Itoa(check.Port)))
+		if err == nil {
+			_ = listener6.Close()
 		}
 	}
 	// 所有端口都可用

@@ -36,17 +36,23 @@ const controlOfflineMessage = "隧道控制连接已离线"
 // Server 控制通道服务器，管理服务端所有客户端连接、隧道和数据通道。
 // 内部维护三个并发安全的Map：active（在线客户端）、tunnels（活跃隧道）、pending（待绑定数据连接）。
 type Server struct {
-	cfg       config.ProtocolConfig       // 协议通道配置
-	database  *sql.DB                     // 数据库连接
-	log       *logger.Logger              // 日志记录器
-	options   ServerOptions               // 服务器选项
-	traffic   *trafficRecorder            // 流量记录器
-	mu        sync.Mutex                  // 保护active map的互斥锁
-	active    map[int64]*clientConn       // 在线客户端连接映射：tunnelID -> clientConn
-	tunnelMu  sync.Mutex                  // 保护tunnels map的互斥锁
-	tunnels   map[int64]*activeTunnel     // 活跃隧道映射：tunnelID -> activeTunnel
-	pendingMu sync.Mutex                  // 保护pending map的互斥锁
-	pending   map[string]*pendingDataConn // 待绑定的数据连接映射：connectionID -> pendingDataConn
+	cfg            config.ProtocolConfig // 协议通道配置
+	database       *sql.DB               // 数据库连接
+	log            *logger.Logger        // 日志记录器
+	options        ServerOptions         // 服务器选项
+	traffic        *trafficRecorder      // 流量记录器
+	tunnelIPv6Host string
+	mu             sync.Mutex            // 保护active map的互斥锁
+	active         map[int64]*clientConn // 在线客户端连接映射：tunnelID -> clientConn
+	startMu        sync.Mutex
+	tunnelMu       sync.Mutex              // 保护tunnels map的互斥锁
+	tunnels        map[int64]*activeTunnel // 活跃隧道映射：tunnelID -> activeTunnel
+	udpMu          sync.Mutex
+	udpTunnels     map[int64]*activeUDPTunnel
+	udpSessionIdle time.Duration
+	udpMaxSessions int
+	pendingMu      sync.Mutex                  // 保护pending map的互斥锁
+	pending        map[string]*pendingDataConn // 待绑定的数据连接映射：connectionID -> pendingDataConn
 }
 
 // ServerOptions 服务器可配置选项，允许调整心跳、流量统计等运行参数。
@@ -68,8 +74,8 @@ type clientConn struct {
 // 参数database：数据库连接。
 // 参数log：日志记录器。
 // 返回值：初始化好的Server指针。
-func NewServer(cfg config.ProtocolConfig, database *sql.DB, log *logger.Logger) *Server {
-	return NewServerWithOptions(cfg, database, log, ServerOptions{})
+func NewServer(cfg config.ProtocolConfig, database *sql.DB, log *logger.Logger, tunnelConfig ...config.TunnelConfig) *Server {
+	return NewServerWithOptions(cfg, database, log, ServerOptions{}, tunnelConfig...)
 }
 
 // NewServerWithOptions 创建控制通道服务器实例（支持自定义选项）。
@@ -78,16 +84,32 @@ func NewServer(cfg config.ProtocolConfig, database *sql.DB, log *logger.Logger) 
 // 参数log：日志记录器。
 // 参数options：自定义服务器选项。
 // 返回值：初始化好的Server指针。
-func NewServerWithOptions(cfg config.ProtocolConfig, database *sql.DB, log *logger.Logger, options ServerOptions) *Server {
+func NewServerWithOptions(cfg config.ProtocolConfig, database *sql.DB, log *logger.Logger, options ServerOptions, tunnelConfig ...config.TunnelConfig) *Server {
+	ipv6TunnelHost := "::"
+	udpSessionIdle := 60 * time.Second
+	udpMaxSessions := 1024
+	if len(tunnelConfig) > 0 && strings.TrimSpace(tunnelConfig[0].IPv6RemoteHost) != "" {
+		ipv6TunnelHost = tunnelConfig[0].IPv6RemoteHost
+	}
+	if len(tunnelConfig) > 0 && tunnelConfig[0].UDPSessionIdleSeconds > 0 {
+		udpSessionIdle = time.Duration(tunnelConfig[0].UDPSessionIdleSeconds) * time.Second
+	}
+	if len(tunnelConfig) > 0 && tunnelConfig[0].UDPMaxSessions > 0 {
+		udpMaxSessions = tunnelConfig[0].UDPMaxSessions
+	}
 	return &Server{
-		cfg:      cfg,
-		database: database,
-		log:      log,
-		options:  normalizeServerOptions(options),
-		traffic:  newTrafficRecorder(database, log, normalizeServerOptions(options).TrafficFlushInterval),
-		active:   make(map[int64]*clientConn),
-		tunnels:  make(map[int64]*activeTunnel),
-		pending:  make(map[string]*pendingDataConn),
+		cfg:            cfg,
+		database:       database,
+		log:            log,
+		options:        normalizeServerOptions(options),
+		traffic:        newTrafficRecorder(database, log, normalizeServerOptions(options).TrafficFlushInterval),
+		tunnelIPv6Host: ipv6TunnelHost,
+		udpSessionIdle: udpSessionIdle,
+		udpMaxSessions: udpMaxSessions,
+		active:         make(map[int64]*clientConn),
+		tunnels:        make(map[int64]*activeTunnel),
+		udpTunnels:     make(map[int64]*activeUDPTunnel),
+		pending:        make(map[string]*pendingDataConn),
 	}
 }
 
@@ -260,16 +282,28 @@ func (s *Server) DisconnectTunnel(tunnelID int64) {
 // 使用配置中的ControlHost和ControlPort。
 // 返回值：TCP监听器和可能的错误。
 func (s *Server) listenControl() (net.Listener, error) {
-	addr := fmt.Sprintf("%s:%d", hostOrDefault(s.cfg.ControlHost), s.cfg.ControlPort)
-	return net.Listen("tcp", addr)
+	listeners, ipv6Err, err := listenTCPDual(s.cfg.ControlHost, s.cfg.ControlIPv6Host, s.cfg.ControlPort)
+	if err != nil {
+		return nil, err
+	}
+	if ipv6Err != nil {
+		s.logError("IPv6控制监听不可用，已继续使用IPv4: %v", ipv6Err)
+	}
+	return newDualTCPListener(listeners), nil
 }
 
 // listenData 创建数据通道的TCP监听器。
 // 使用配置中的DataHost和DataPort。
 // 返回值：TCP监听器和可能的错误。
 func (s *Server) listenData() (net.Listener, error) {
-	addr := fmt.Sprintf("%s:%d", hostOrDefault(s.cfg.DataHost), s.cfg.DataPort)
-	return net.Listen("tcp", addr)
+	listeners, ipv6Err, err := listenTCPDual(s.cfg.DataHost, s.cfg.DataIPv6Host, s.cfg.DataPort)
+	if err != nil {
+		return nil, err
+	}
+	if ipv6Err != nil {
+		s.logError("IPv6数据监听不可用，已继续使用IPv4: %v", ipv6Err)
+	}
+	return newDualTCPListener(listeners), nil
 }
 
 // handleConn 处理单个客户端控制连接的完整生命周期。
@@ -306,6 +340,10 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	}
 
 	tunnel, tunnelErr := db.GetTunnelByID(ctx, s.database, key.TunnelID)
+	if tunnelErr == nil && strings.TrimSpace(authReq.TunnelProtocol) != "" && !strings.EqualFold(authReq.TunnelProtocol, string(tunnel.Protocol)) {
+		_ = writeWithDeadline(conn, protocol.NewErrorMessage(first.RequestID, protocol.CodeConflict, "隧道协议不匹配"))
+		return
+	}
 	if tunnelErr == nil && tunnel.Status == "stopped" && !tunnel.AutoStart {
 		_ = writeWithDeadline(conn, protocol.NewErrorMessage(first.RequestID, protocol.CodeConflict, tunnelStoppedByServerMessage))
 		return
@@ -331,7 +369,7 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	if err := db.MarkTunnelKeyOnline(ctx, s.database, key.TunnelID, remoteIP); err != nil {
 		s.logError("mark tunnel online failed tunnel_id=%d: %v", key.TunnelID, err)
 	}
-	_ = writeWithDeadline(conn, authResponse(first.RequestID, true, clientID, key.TunnelID, remotePort, "ok"))
+	_ = writeWithDeadline(conn, authResponse(first.RequestID, true, clientID, key.TunnelID, remotePort, "ok", string(tunnel.Protocol)))
 	if !s.recoverControlOfflineTunnel(ctx, key.TunnelID) {
 		s.startTunnelIfAutoStart(ctx, key.TunnelID)
 	}
@@ -526,8 +564,13 @@ func writeWithDeadline(conn net.Conn, message protocol.Message) error {
 // 参数remotePort：分配的远程端口。
 // 参数message：附加说明信息。
 // 返回值：构建好的认证响应协议消息。
-func authResponse(requestID string, success bool, clientID int64, tunnelID int64, remotePort int, message string) protocol.Message {
+func authResponse(requestID string, success bool, clientID int64, tunnelID int64, remotePort int, message string, tunnelProtocol ...string) protocol.Message {
+	protocolName := ""
+	if len(tunnelProtocol) > 0 {
+		protocolName = tunnelProtocol[0]
+	}
 	response, _ := protocol.NewMessage(protocol.TypeAuthResponse, 0, tunnelID, "", protocol.AuthResponse{
+		TunnelProtocol:           protocolName,
 		Success:                  success,
 		ClientID:                 clientID,
 		TunnelID:                 tunnelID,

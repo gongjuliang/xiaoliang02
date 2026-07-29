@@ -344,6 +344,28 @@ func TestServerMCPCreateTunnelHonorsExplicitAutoStartFalse(t *testing.T) {
 	}
 }
 
+func TestServerMCPCreateTunnelSupportsUDP(t *testing.T) {
+	router, database, _ := setupServerMCPRouterWithRuntime(t)
+	defer database.Close()
+
+	rec := callServerMCP(t, router, "server-mcp-token", "server.create_tunnel", map[string]any{
+		"name":        "mcp-udp-tunnel",
+		"protocol":    "udp",
+		"remote_host": "0.0.0.0",
+		"remote_port": 18084,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var createdPayload struct {
+		Tunnel model.Tunnel `json:"tunnel"`
+	}
+	decodeMCPToolStructured(t, rec, &createdPayload)
+	if createdPayload.Tunnel.Protocol != model.TunnelProtocolUDP {
+		t.Fatalf("protocol=%q want udp", createdPayload.Tunnel.Protocol)
+	}
+}
+
 func setupServerMCPRouter(t *testing.T) (http.Handler, *sql.DB) {
 	t.Helper()
 

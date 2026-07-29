@@ -51,6 +51,7 @@ type AppConfig struct {
 
 // HTTPConfig HTTP服务配置，包含监听地址、端口、HTTPS和超时设置。
 type HTTPConfig struct {
+	IPv6Host               string `yaml:"ipv6_host" json:"ipv6_host"`
 	Host                   string `yaml:"host" json:"host"`                                         // 监听地址
 	Port                   int    `yaml:"port" json:"port"`                                         // 监听端口（默认25510）
 	HTTPSEnabled           bool   `yaml:"https_enabled" json:"https_enabled"`                       // 是否启用HTTPS
@@ -86,16 +87,21 @@ type AuthConfig struct {
 
 // ProtocolConfig 协议通道配置，定义控制通道和数据通道的监听地址和端口。
 type ProtocolConfig struct {
-	ControlHost string `yaml:"control_host" json:"control_host"` // 控制通道监听地址
-	ControlPort int    `yaml:"control_port" json:"control_port"` // 控制通道监听端口（默认25511）
-	DataHost    string `yaml:"data_host" json:"data_host"`       // 数据通道监听地址
-	DataPort    int    `yaml:"data_port" json:"data_port"`       // 数据通道监听端口（默认25512）
+	ControlIPv6Host string `yaml:"control_ipv6_host" json:"control_ipv6_host"`
+	ControlHost     string `yaml:"control_host" json:"control_host"`
+	ControlPort     int    `yaml:"control_port" json:"control_port"`
+	DataIPv6Host    string `yaml:"data_ipv6_host" json:"data_ipv6_host"`
+	DataHost        string `yaml:"data_host" json:"data_host"`
+	DataPort        int    `yaml:"data_port" json:"data_port"`
 }
 
 // TunnelConfig 隧道配置，定义允许的远程端口范围。
 type TunnelConfig struct {
-	RemotePortMin int `yaml:"remote_port_min" json:"remote_port_min"` // 远程端口范围最小值
-	RemotePortMax int `yaml:"remote_port_max" json:"remote_port_max"` // 远程端口范围最大值
+	IPv6RemoteHost        string `yaml:"ipv6_remote_host" json:"ipv6_remote_host"`
+	UDPSessionIdleSeconds int    `yaml:"udp_session_idle_seconds" json:"udp_session_idle_seconds"`
+	UDPMaxSessions        int    `yaml:"udp_max_sessions" json:"udp_max_sessions"`
+	RemotePortMin         int    `yaml:"remote_port_min" json:"remote_port_min"` // 远程端口范围最小值
+	RemotePortMax         int    `yaml:"remote_port_max" json:"remote_port_max"` // 远程端口范围最大值
 }
 
 // MCPConfig MCP（Model Context Protocol）服务配置。
@@ -181,6 +187,7 @@ func Default() *Config {
 			Environment: "production",
 		},
 		HTTP: HTTPConfig{
+			IPv6Host:               "::",
 			Host:                   "0.0.0.0",
 			Port:                   25510,
 			HTTPSEnabled:           false,
@@ -207,14 +214,19 @@ func Default() *Config {
 			LoginRateLimitPerMinute: 10,
 		},
 		Protocol: ProtocolConfig{
-			ControlHost: "0.0.0.0",
-			ControlPort: 25511,
-			DataHost:    "0.0.0.0",
-			DataPort:    25512,
+			ControlIPv6Host: "::",
+			ControlHost:     "0.0.0.0",
+			ControlPort:     25511,
+			DataIPv6Host:    "::",
+			DataHost:        "0.0.0.0",
+			DataPort:        25512,
 		},
 		Tunnel: TunnelConfig{
-			RemotePortMin: 0,
-			RemotePortMax: 65535,
+			IPv6RemoteHost:        "::",
+			UDPSessionIdleSeconds: 60,
+			UDPMaxSessions:        1024,
+			RemotePortMin:         0,
+			RemotePortMax:         65535,
 		},
 	}
 }
@@ -242,6 +254,12 @@ func (c *Config) Validate() error {
 	}
 	if !validPort(c.Protocol.DataPort) {
 		return fmt.Errorf("protocol.data_port must be between 1 and 65535")
+	}
+	if c.Tunnel.UDPSessionIdleSeconds <= 0 {
+		return fmt.Errorf("tunnel.udp_session_idle_seconds must be greater than 0")
+	}
+	if c.Tunnel.UDPMaxSessions <= 0 {
+		return fmt.Errorf("tunnel.udp_max_sessions must be greater than 0")
 	}
 	if c.Database.Path == "" {
 		return fmt.Errorf("database.path is required")

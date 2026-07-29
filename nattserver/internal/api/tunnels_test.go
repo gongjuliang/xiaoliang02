@@ -107,6 +107,44 @@ func TestTunnelManagementFlow(t *testing.T) {
 	assertAuditLogCount(t, database, 6)
 }
 
+func TestTunnelAPISeparatesTCPAndUDPTunnels(t *testing.T) {
+	router, database, tokens := setupAuthenticatedServerRouter(t)
+	defer database.Close()
+
+	tcpResp := authorizedJSON(t, router, http.MethodPost, "/api/server/v1/tunnels", tokens.AccessToken, map[string]any{
+		"name": "tcp-shared-port", "protocol": "tcp", "remote_port": 19001,
+	})
+	var tcpCreated tunnelSecretResponse
+	decodeResponseData(t, tcpResp, &tcpCreated)
+
+	udpResp := authorizedJSON(t, router, http.MethodPost, "/api/server/v1/tunnels", tokens.AccessToken, map[string]any{
+		"name": "udp-shared-port", "protocol": "udp", "remote_port": 19001,
+	})
+	var udpCreated tunnelSecretResponse
+	decodeResponseData(t, udpResp, &udpCreated)
+	if udpCreated.Tunnel.Protocol != model.TunnelProtocolUDP {
+		t.Fatalf("udp tunnel protocol=%q want udp", udpCreated.Tunnel.Protocol)
+	}
+
+	for _, tc := range []struct {
+		path string
+		want model.TunnelProtocol
+	}{
+		{path: "/api/server/v1/tunnels?protocol=tcp", want: model.TunnelProtocolTCP},
+		{path: "/api/server/v1/tunnels?protocol=udp", want: model.TunnelProtocolUDP},
+	} {
+		listResp := authorizedJSON(t, router, http.MethodGet, tc.path, tokens.AccessToken, nil)
+		var result struct {
+			Items []model.Tunnel `json:"items"`
+			Total int64          `json:"total"`
+		}
+		decodeResponseData(t, listResp, &result)
+		if result.Total != 1 || len(result.Items) != 1 || result.Items[0].Protocol != tc.want {
+			t.Fatalf("%s returned %+v, want one %s tunnel", tc.path, result, tc.want)
+		}
+	}
+}
+
 func TestTunnelCreateRejectsPortOutsideConfiguredRange(t *testing.T) {
 	router, database, tokens := setupAuthenticatedServerRouter(t)
 	defer database.Close()

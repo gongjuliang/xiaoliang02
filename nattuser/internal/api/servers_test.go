@@ -117,6 +117,43 @@ func TestServerConnectionManagementFlow(t *testing.T) {
 	assertAuditLogCount(t, database, 6)
 }
 
+func TestServerConnectionAPISeparatesTCPAndUDPConnections(t *testing.T) {
+	router, database, tokens := setupAuthenticatedClientRouter(t)
+	defer database.Close()
+
+	for _, protocol := range []string{"tcp", "udp"} {
+		createResp := authorizedJSON(t, router, http.MethodPost, "/api/client/v1/tunnel-connections", tokens.AccessToken, map[string]any{
+			"name":          protocol + "-connection",
+			"protocol":      protocol,
+			"server_host":   "example.com",
+			"client_secret": "xiaoliang_" + protocol + "_secret",
+			"local_host":    "127.0.0.1",
+			"local_port":    19002,
+		})
+		var created struct {
+			Protocol string `json:"protocol"`
+		}
+		decodeResponseData(t, createResp, &created)
+		if created.Protocol != protocol {
+			t.Fatalf("created protocol=%q want %q", created.Protocol, protocol)
+		}
+	}
+
+	for _, protocol := range []string{"tcp", "udp"} {
+		listResp := authorizedJSON(t, router, http.MethodGet, "/api/client/v1/tunnel-connections?protocol="+protocol, tokens.AccessToken, nil)
+		var result struct {
+			Items []struct {
+				Protocol string `json:"protocol"`
+			} `json:"items"`
+			Total int64 `json:"total"`
+		}
+		decodeResponseData(t, listResp, &result)
+		if result.Total != 1 || len(result.Items) != 1 || result.Items[0].Protocol != protocol {
+			t.Fatalf("protocol=%s returned %+v", protocol, result)
+		}
+	}
+}
+
 func TestServerConnectionCreateUsesDefaultPortsRequiresServerHostAndRejectsBadPorts(t *testing.T) {
 	router, database, tokens := setupAuthenticatedClientRouter(t)
 	defer database.Close()

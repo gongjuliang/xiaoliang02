@@ -28,12 +28,18 @@ Use this skill when working on the `xiaoliang02` intranet penetration project. P
 - Default startup uses the executable directory as working directory and creates the runtime root there.
 - Do not reintroduce tunnel protocol TLS. Web console HTTPS is separate and only belongs to `http.https_enabled`.
 - Do not make `nattserver` store local target host or local target port for tunnels. Local targets are configured by `nattuser`.
+- Tunnels have a persisted `protocol` of `tcp` or `udp`; default omitted values to `tcp`. Keep `tunnels.html` TCP-only and `udp-tunnels.html` UDP-only.
+- Web, control, data, and public listeners are IPv4/IPv6 dual stack. IPv4 binding is required; IPv6 binding failures must log a Chinese warning and keep IPv4 running.
+- Server tunnel uniqueness is `(protocol, remote_port)`, so TCP and UDP may share a port number.
+- UDP public traffic uses the existing data TCP port. A client sends `udp_bind`, waits for `udp_bind_ack`, then exchanges `udp_packet` frames. Do not send UDP payload before the acknowledgement.
+- UDP maps each public source `IP:port` to a local UDP socket. Defaults: 60-second idle timeout, 1024 sessions per tunnel, and 65507-byte maximum datagram; local targets may only reply through an existing session.
 - New secrets must use the `xiaoliang_` prefix.
 - Password and secret hashes use the SM3 salt format: `salt8 + "$" + sm3(base64(salt8 + input))`.
 - MCP uses standard JSON-RPC Streamable HTTP at `POST /mcp`; do not use the old `/mcp/tools/call` path.
 - Server MCP `server.create_tunnel` defaults omitted `auto_start` to `true`, creating a `waiting` tunnel.
 - Client MCP can create/delete tunnel connections with `client.create_tunnel_connection` and `client.delete_tunnel_connection`.
 - Client manual disconnect semantics: Web/MCP disconnect must set `status=stopped`, clear `last_error`, and set `auto_start=false`; Web/MCP connect must set `auto_start=true` so manager reconnects again.
+- `StartTunnel` must serialize auto-start and manual start attempts to prevent public-listener and SQLite status-update races.
 - Server manual start while the client is offline must set the tunnel to `waiting`, enable `auto_start`, clear `last_error`, and not bind the public port until the client reconnects.
 - Server tunnel recovery: only auto-recover `status=error` when `last_error` is exactly `隧道控制连接已离线`; reconnect or heartbeat should restart the tunnel and clear that error.
 - Heartbeat acks carry `tunnel_status`, `last_error`, and `remote_port`; client heartbeat handling must sync server `stopped`/`error` into local visible status.
@@ -59,14 +65,14 @@ If Windows locks Go temp executables, set a unique `GOTMPDIR` under the workspac
 
 Server:
 
-- Web: `0.0.0.0:25510`.
-- Control: `0.0.0.0:25511`.
-- Data: `0.0.0.0:25512`.
+- Web: `0.0.0.0:25510` and `[::]:25510`.
+- Control: `0.0.0.0:25511` and `[::]:25511`.
+- Data: `0.0.0.0:25512` and `[::]:25512`.
 - Public tunnel range: `0-65535`, but created tunnel ports must be `1-65535`.
 
 Client:
 
-- Web: `127.0.0.1:25520`.
+- Web: `0.0.0.0:25520` and `[::]:25520`.
 - Default control port: `25511`.
 - Default data port: `25512`.
 - No default server host during initialization; each tunnel connection supplies its own server host.
@@ -76,8 +82,8 @@ Client:
 1. Read the relevant root document first: the Chinese requirements document for requirements, and the Chinese usage document for operation.
 2. Inspect the actual code before changing behavior. Search with PowerShell `Select-String` if `rg` is unavailable.
 3. Make small scoped edits following existing Gin, SQLite, Layui, and jQuery patterns.
-4. For frontend changes, check both `nattserver/Web/EmbedFiles` and `nattuser/Web/EmbedFiles`.
-5. For API or protocol changes, update tests and docs in the same pass.
+4. For frontend changes, check both `nattserver/Web/EmbedFiles` and `nattuser/Web/EmbedFiles`; preserve the independent TCP and UDP page split.
+5. For API or protocol changes, update tests and docs in the same pass. List APIs accept `protocol=tcp|udp`; create APIs and MCP create tools accept `protocol` and default it to `tcp`.
 6. Verify with focused tests, then full `go test ./... -count=1 -p 1` and `go build -p 1 ./...` when behavior changes.
 
 ## References

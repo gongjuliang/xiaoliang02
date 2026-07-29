@@ -30,3 +30,29 @@ func TestReadWriteMessage(t *testing.T) {
 		t.Fatalf("payload client_time=%d want=100", payload.ClientTime)
 	}
 }
+
+func TestReadWriteUDPPacket(t *testing.T) {
+	message, err := NewMessage(TypeUDPPacket, 0, 9, "session-1", UDPPacket{Data: []byte("ping")})
+	if err != nil {
+		t.Fatalf("new udp packet: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := WriteMessage(&buf, message); err != nil {
+		t.Fatalf("write udp packet: %v", err)
+	}
+	got, err := ReadMessage(&buf)
+	if err != nil {
+		t.Fatalf("read udp packet: %v", err)
+	}
+	if got.Type != TypeUDPPacket || got.TunnelID != 9 || got.ConnectionID != "session-1" {
+		t.Fatalf("unexpected udp message: %+v", got)
+	}
+	payload, err := DecodePayload[UDPPacket](got)
+	if err != nil {
+		t.Fatalf("decode udp packet: %v", err)
+	}
+	if string(payload.Data) != "ping" {
+		t.Fatalf("udp packet=%q want ping", payload.Data)
+	}
+}

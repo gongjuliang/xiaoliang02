@@ -156,42 +156,55 @@ func RunInitialization(ctx context.Context, defaultCfg *config.Config) (*config.
 	if defaultCfg == nil {
 		defaultCfg = config.Default()
 	}
-	if err := CheckPorts([]PortCheck{{Name: "HTTP管理端口", Host: defaultCfg.HTTP.Host, Port: defaultCfg.HTTP.Port}}); err != nil {
+	if err := CheckPorts([]PortCheck{{Name: "HTTP管理端口", Host: defaultCfg.HTTP.Host, IPv6Host: defaultCfg.HTTP.IPv6Host, Port: defaultCfg.HTTP.Port}}); err != nil {
 		return nil, err
 	}
 	fmt.Printf("系统需要初始化，默认配置文件为 %s。\n", config.DefaultPath)
 	fmt.Printf("请在浏览器打开 %s/init.html 完成初始化。\n", InitializationURL(defaultCfg))
 
 	done := make(chan *config.Config, 1)
+	listeners, ipv6Err, err := listenTCPDual(defaultCfg.HTTP.Host, defaultCfg.HTTP.IPv6Host, defaultCfg.HTTP.Port)
+	if err != nil {
+		return nil, fmt.Errorf("%d端口被占用", defaultCfg.HTTP.Port)
+	}
+	if ipv6Err != nil {
+		fmt.Printf("[WARN] IPv6 初始化 Web 监听不可用，已继续使用 IPv4: %v\n", ipv6Err)
+	}
 	server := &http.Server{
-		Addr:         net.JoinHostPort(defaultCfg.HTTP.Host, strconv.Itoa(defaultCfg.HTTP.Port)),
 		Handler:      NewInitHandler(defaultCfg, done),
 		ReadTimeout:  time.Duration(defaultCfg.HTTP.ReadTimeoutSeconds) * time.Second,
 		WriteTimeout: time.Duration(defaultCfg.HTTP.WriteTimeoutSeconds) * time.Second,
 	}
-	errCh := make(chan error, 1)
-	go func() {
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	errCh := make(chan error, len(listeners))
+	for _, listener := range listeners {
+		listener := listener
+		go func() {
+			err := server.Serve(listener)
+			if err == http.ErrServerClosed {
+				err = nil
+			}
 			errCh <- err
-			return
+		}()
+	}
+	shutdown := func(received int) {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownCtx)
+		for ; received < len(listeners); received++ {
+			<-errCh
 		}
-		errCh <- nil
-	}()
+	}
 
 	select {
 	case cfg := <-done:
 		fmt.Println("初始化完成，正在切换到正常控制台...")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		_ = server.Shutdown(shutdownCtx)
-		<-errCh
+		shutdown(0)
 		return cfg, nil
 	case err := <-errCh:
+		shutdown(1)
 		return nil, err
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		_ = server.Shutdown(shutdownCtx)
+		shutdown(0)
 		return nil, ctx.Err()
 	}
 }

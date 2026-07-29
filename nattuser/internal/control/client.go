@@ -53,10 +53,12 @@ type Options struct {
 // Manager 控制连接管理器，管理所有到服务端的控制连接和数据通道。
 // 以数据库为期望状态源，周期性同步活跃连接。线程安全。
 type Manager struct {
-	cfg      *config.Config // 客户端配置
-	database *sql.DB        // 数据库连接
-	log      *logger.Logger // 日志记录器
-	options  Options        // 运行时选项
+	udpMu     sync.Mutex
+	udpRelays map[int64]*activeUDPRelay
+	cfg       *config.Config // 客户端配置
+	database  *sql.DB        // 数据库连接
+	log       *logger.Logger // 日志记录器
+	options   Options        // 运行时选项
 
 	mu      sync.Mutex                       // 保护active map的互斥锁
 	active  map[int64]*activeConnection      // 活跃控制连接映射：tunnel_connection ID → activeConnection
@@ -81,12 +83,13 @@ func NewManagerWithOptions(cfg *config.Config, database *sql.DB, log *logger.Log
 		cfg = config.Default()
 	}
 	return &Manager{
-		cfg:      cfg,
-		database: database,
-		log:      log,
-		options:  normalizeOptions(options),
-		active:   make(map[int64]*activeConnection),
-		data:     make(map[string]*activeDataConnection),
+		cfg:       cfg,
+		database:  database,
+		log:       log,
+		options:   normalizeOptions(options),
+		active:    make(map[int64]*activeConnection),
+		data:      make(map[string]*activeDataConnection),
+		udpRelays: make(map[int64]*activeUDPRelay),
 	}
 }
 
@@ -175,6 +178,7 @@ func (m *Manager) stopAll() {
 	for _, connection := range active {
 		connection.cancel()
 	}
+	m.stopAllUDPRelays()
 	m.workers.Wait()
 }
 
@@ -248,6 +252,7 @@ func (m *Manager) connectAndServe(ctx context.Context, connection model.ServerCo
 	// Control authentication happens before any tunnel command is accepted; the
 	// server returns heartbeat settings and the stable server-side client id.
 	authReq, err := protocol.NewMessage(protocol.TypeAuthRequest, 0, 0, "", protocol.AuthRequest{
+		TunnelProtocol:  connection.Protocol,
 		ClientSecret:    connection.ClientSecret,
 		ClientName:      connection.Name,
 		ClientVersion:   m.cfg.App.Version,
@@ -286,6 +291,9 @@ func (m *Manager) connectAndServe(ctx context.Context, connection model.ServerCo
 			authResp.Message = "authentication failed"
 		}
 		return fmt.Errorf("%s", localizeProtocolMessage(authResp.Message))
+	}
+	if authResp.TunnelProtocol != "" && !strings.EqualFold(authResp.TunnelProtocol, connection.Protocol) {
+		return fmt.Errorf("隧道协议不匹配")
 	}
 	if err := db.MarkServerConnectionConnectedWithRemotePort(ctx, m.database, connection.ID, authResp.RemotePort); err != nil {
 		return err
@@ -390,11 +398,26 @@ func (m *Manager) handleMessage(ctx context.Context, connectionID int64, writer 
 		return nil
 	case protocol.TypeTunnelStart:
 		m.logInfo("received control command server_connection_id=%d type=%s request_id=%s", connectionID, message.Type, message.RequestID)
+		payload, err := protocol.DecodePayload[tunnelCommandPayload](message)
+		if err != nil {
+			return err
+		}
+		connection, err := db.GetServerConnectionByID(ctx, m.database, connectionID)
+		if err != nil {
+			return err
+		}
+		if strings.EqualFold(payload.Protocol, "udp") {
+			if !strings.EqualFold(connection.Protocol, "udp") {
+				return fmt.Errorf("隧道协议不匹配")
+			}
+			m.startUDPRelay(ctx, connection, message.TunnelID)
+		}
 		return nil
 	case protocol.TypeTunnelStop:
 		m.logInfo("received control command server_connection_id=%d type=%s request_id=%s", connectionID, message.Type, message.RequestID)
 		_ = db.MarkServerConnectionError(ctx, m.database, connectionID, serverTunnelStoppedError)
 		m.closeDataConnectionsForServer(connectionID)
+		m.stopUDPRelay(connectionID)
 		return nil
 	case protocol.TypeError:
 		protocolErr, _ := protocol.DecodePayload[protocol.ProtocolError](message)
@@ -416,6 +439,7 @@ func (m *Manager) handleHeartbeatAck(ctx context.Context, connectionID int64, me
 			return err
 		}
 		m.closeDataConnectionsForServer(connectionID)
+		m.stopUDPRelay(connectionID)
 		return nil
 	case "error":
 		if strings.TrimSpace(ack.LastError) != "" {

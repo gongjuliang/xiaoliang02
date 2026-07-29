@@ -48,6 +48,7 @@ type TunnelProtocol string
 const (
 	// TunnelProtocolTCP TCP协议隧道，基于TCP进行数据传输。
 	TunnelProtocolTCP TunnelProtocol = "tcp"
+	TunnelProtocolUDP TunnelProtocol = "udp"
 )
 
 // TunnelStatus 隧道运行状态类型，描述隧道当前所处的生命周期阶段。

@@ -60,7 +60,7 @@ if (NATT.requireAuth()) {
         return (n / 1024 / 1024 / 1024).toFixed(1) + " GB";
     }
     function loadTunnels() {
-        NATT.request("GET", "/tunnels?page=1&page_size=100").then(function (p) {
+        NATT.request("GET", "/tunnels?page=1&page_size=100&protocol=tcp").then(function (p) {
             var rows = (p.items || []).map(function (t) {
                 return '<tr><td>' + t.id + '</td><td>' + NATT.escapeHtml(t.name) + '</td><td>' +
                     NATT.escapeHtml(t.remote_host) + ':' + t.remote_port + '</td><td>' + NATT.badge(t.status) +
@@ -93,6 +93,7 @@ if (NATT.requireAuth()) {
             btn: ["保存", "取消"],
             yes: function (index) {
                 NATT.request("POST", "/tunnels", {
+                    protocol: "tcp",
                     name: $("#tn").val(),
                     remote_host: $("#rh").val(),
                     remote_port: +$("#rp").val(),

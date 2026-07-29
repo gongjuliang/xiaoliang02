@@ -69,7 +69,7 @@ if (NATT.requireAuth()) {
         layui.layer.alert('<div class="' + className + '">' + NATT.escapeHtml(text || "-") + '</div>', { title: title, area: "560px" });
     }
     function loadConnections() {
-        NATT.request("GET", "/tunnel-connections?page=1&page_size=100").then(function (p) {
+        NATT.request("GET", "/tunnel-connections?page=1&page_size=100&protocol=tcp").then(function (p) {
             var rows = (p.items || []).map(function (x) {
                 return '<tr><td>' + x.id + '</td><td>' + NATT.escapeHtml(x.name) + '</td><td>' +
                     NATT.escapeHtml(x.server_host) + '</td><td>' + x.server_port + '</td><td>' + x.data_port + '</td><td>' +
@@ -103,6 +103,7 @@ if (NATT.requireAuth()) {
                 btn: ["保存", "取消"],
                 yes: function (index) {
                     NATT.request("POST", "/tunnel-connections", {
+                        protocol: "tcp",
                         name: $("#cn").val(),
                         server_host: $("#sh").val(),
                         server_port: +$("#sp").val(),
