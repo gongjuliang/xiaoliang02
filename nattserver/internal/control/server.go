@@ -41,6 +41,7 @@ type Server struct {
 	log            *logger.Logger        // 日志记录器
 	options        ServerOptions         // 服务器选项
 	traffic        *trafficRecorder      // 流量记录器
+	state          *tunnelStateCache
 	tunnelIPv6Host string
 	mu             sync.Mutex            // 保护active map的互斥锁
 	active         map[int64]*clientConn // 在线客户端连接映射：tunnelID -> clientConn
@@ -103,6 +104,7 @@ func NewServerWithOptions(cfg config.ProtocolConfig, database *sql.DB, log *logg
 		log:            log,
 		options:        normalizeServerOptions(options),
 		traffic:        newTrafficRecorder(database, log, normalizeServerOptions(options).TrafficFlushInterval),
+		state:          newTunnelStateCache(database, 0, 0),
 		tunnelIPv6Host: ipv6TunnelHost,
 		udpSessionIdle: udpSessionIdle,
 		udpMaxSessions: udpMaxSessions,
@@ -152,6 +154,13 @@ func (s *Server) Run(ctx context.Context) error {
 		errCh <- s.serveData(ctx, dataListener)
 	}()
 	go s.traffic.run(ctx)
+	stateCtx, stopState := context.WithCancel(ctx)
+	defer stopState()
+	stateDone := make(chan struct{})
+	go func() {
+		defer close(stateDone)
+		s.state.run(stateCtx, s.logError)
+	}()
 
 	select {
 	case <-ctx.Done():
@@ -160,12 +169,16 @@ func (s *Server) Run(ctx context.Context) error {
 		_ = dataListener.Close()
 		<-errCh
 		<-errCh
+		stopState()
+		<-stateDone
 		return nil
 	case err := <-errCh:
 		s.stopAllTunnels()
 		_ = controlListener.Close()
 		_ = dataListener.Close()
 		<-errCh
+		stopState()
+		<-stateDone
 		return err
 	}
 }
@@ -234,6 +247,14 @@ func (s *Server) hasActiveClient(tunnelID int64) bool {
 	return s.active[tunnelID] != nil
 }
 
+func (s *Server) OverlayTunnelStates(tunnels []model.Tunnel) []model.Tunnel {
+	return s.state.overlayAll(tunnels)
+}
+
+func (s *Server) ForgetTunnelState(tunnelID int64) {
+	s.state.remove(tunnelID)
+}
+
 // closeActiveClient 关闭并移除指定隧道当前的控制连接。
 func (s *Server) closeActiveClient(tunnelID int64) {
 	s.mu.Lock()
@@ -245,9 +266,10 @@ func (s *Server) closeActiveClient(tunnelID int64) {
 	if client != nil {
 		_ = client.conn.Close()
 	}
+	s.state.remove(tunnelID)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if err := db.MarkTunnelKeyOffline(ctx, s.database, tunnelID); err != nil {
+	if err := db.RetrySQLiteBusy(ctx, func() error { return db.MarkTunnelKeyOffline(ctx, s.database, tunnelID) }); err != nil {
 		s.logError("mark tunnel offline after closing active client failed tunnel_id=%d: %v", tunnelID, err)
 	}
 }
@@ -270,10 +292,8 @@ func (s *Server) DisconnectTunnel(tunnelID int64) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if err := db.MarkTunnelKeyOffline(ctx, s.database, tunnelID); err != nil {
-		s.logError("mark disconnected tunnel offline failed tunnel_id=%d: %v", tunnelID, err)
-	}
-	if err := db.MarkTunnelUnavailable(ctx, s.database, tunnelID, "隧道连接已断开"); err != nil {
+	s.state.markOffline(tunnelID, "隧道连接已断开", time.Now())
+	if err := s.state.flush(ctx); err != nil {
 		s.logError("mark disconnected tunnel unavailable failed tunnel_id=%d: %v", tunnelID, err)
 	}
 }
@@ -366,7 +386,8 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 	defer s.unregister(key.TunnelID, active)
-	if err := db.MarkTunnelKeyOnline(ctx, s.database, key.TunnelID, remoteIP); err != nil {
+	s.state.markOnline(key.TunnelID, remoteIP, time.Now())
+	if err := s.state.flush(ctx); err != nil {
 		s.logError("mark tunnel online failed tunnel_id=%d: %v", key.TunnelID, err)
 	}
 	_ = writeWithDeadline(conn, authResponse(first.RequestID, true, clientID, key.TunnelID, remotePort, "ok", string(tunnel.Protocol)))
@@ -418,9 +439,7 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 func (s *Server) handleMessage(ctx context.Context, client *clientConn, message protocol.Message) error {
 	switch message.Type {
 	case protocol.TypeHeartbeat:
-		if err := db.MarkTunnelKeyHeartbeat(ctx, s.database, client.tunnelID); err != nil {
-			return err
-		}
+		s.state.markOnline(client.tunnelID, "", time.Now())
 		s.recoverControlOfflineTunnel(ctx, client.tunnelID)
 		ack, err := protocol.NewMessage(protocol.TypeHeartbeatAck, 0, client.tunnelID, "", s.heartbeatAckPayload(ctx, client.tunnelID))
 		if err != nil {
@@ -492,10 +511,8 @@ func (s *Server) unregister(tunnelID int64, client *clientConn) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if err := db.MarkTunnelKeyOffline(ctx, s.database, tunnelID); err != nil {
-		s.logError("mark tunnel offline failed tunnel_id=%d: %v", tunnelID, err)
-	}
-	if err := db.MarkTunnelUnavailable(ctx, s.database, tunnelID, controlOfflineMessage); err != nil {
+	s.state.markOffline(tunnelID, controlOfflineMessage, time.Now())
+	if err := s.state.flush(ctx); err != nil {
 		s.logError("mark tunnel unavailable failed tunnel_id=%d: %v", tunnelID, err)
 	}
 	s.stopTunnelRuntime(tunnelID)

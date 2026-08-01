@@ -18,6 +18,7 @@ D:\2025Code\ai\natt
 - `nattserver/internal/control`: dual-stack control/data runtime, TCP and UDP tunnel lifecycle, heartbeats, tunnel occupancy, `tunnel_stop`, UDP public-session relay.
 - `nattserver/internal/protocol`: protocol message types and frame read/write.
 - `nattserver/internal/db`: SQLite migration and repositories.
+- `nattserver/internal/control/tunnel_state.go`: instance-owned server tunnel-state cache, immediate critical state flushes, 30-second heartbeat batching, and two-minute offline retention.
 - `nattserver/internal/auth`: JWT, SM2, SM3 password/secret hashing, secret generation.
 - `nattserver/internal/mcp`: JSON-RPC Streamable HTTP endpoint and server tools.
 - `nattserver/Web/EmbedFiles`: embedded HTML/CSS/JS/Layui frontend.
@@ -31,6 +32,7 @@ D:\2025Code\ai\natt
 - `nattuser/internal/control`: server control connection, reconnect, TCP data binding, UDP relay/local UDP sessions, `tunnel_stop` handling.
 - `nattuser/internal/protocol`: protocol message types and frame read/write.
 - `nattuser/internal/db`: SQLite migration and repositories.
+- `nattuser/internal/control/connection_state.go`: instance-owned client connection-state cache, live list overlays, critical state persistence, and bounded offline retention.
 - `nattuser/internal/auth`: JWT, SM2, SM3 password hashing, secret helpers.
 - `nattuser/internal/mcp`: JSON-RPC Streamable HTTP endpoint and client tools.
 - `nattuser/Web/EmbedFiles`: embedded HTML/CSS/JS/Layui frontend.

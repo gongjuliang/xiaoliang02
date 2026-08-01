@@ -18,6 +18,10 @@ import (
 )
 
 func NewRouter(cfg *config.Config, database *sql.DB, log *logger.Logger) *gin.Engine {
+	return NewRouterWithRuntime(cfg, database, log, nil)
+}
+
+func NewRouterWithRuntime(cfg *config.Config, database *sql.DB, log *logger.Logger, runtime ServerConnectionRuntime) *gin.Engine {
 	if cfg.App.Environment == "production" {
 		gin.SetMode(gin.ReleaseMode)
 	}
@@ -47,7 +51,7 @@ func NewRouter(cfg *config.Config, database *sql.DB, log *logger.Logger) *gin.En
 
 		protected := v1.Group("")
 		protected.Use(authHandler.JWTMiddleware())
-		NewServerHandler(database, log, &cfg.ServerDefaults).RegisterRoutes(protected)
+		NewServerHandler(database, log, &cfg.ServerDefaults, runtime).RegisterRoutes(protected)
 		NewOpsHandler(database, log, cfg).RegisterRoutes(protected)
 	}
 	mcp.RegisterClientRoutes(router, database, log, cfg.ServerDefaults)

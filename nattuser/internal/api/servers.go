@@ -25,6 +25,12 @@ type ServerHandler struct {
 	database *sql.DB
 	log      *logger.Logger
 	defaults *config.ServerDefaultsConfig
+	runtime  ServerConnectionRuntime
+}
+
+type ServerConnectionRuntime interface {
+	OverlayServerConnections([]model.ServerConnection) []model.ServerConnection
+	ForgetServerConnectionState(int64)
 }
 
 type serverConnectionRequest struct {
@@ -59,12 +65,16 @@ type serverConnectionResponse struct {
 	UpdatedAt    string                       `json:"updated_at"`
 }
 
-func NewServerHandler(database *sql.DB, log *logger.Logger, defaults *config.ServerDefaultsConfig) *ServerHandler {
-	return &ServerHandler{
+func NewServerHandler(database *sql.DB, log *logger.Logger, defaults *config.ServerDefaultsConfig, runtime ...ServerConnectionRuntime) *ServerHandler {
+	handler := &ServerHandler{
 		database: database,
 		log:      log,
 		defaults: defaults,
 	}
+	if len(runtime) > 0 {
+		handler.runtime = runtime[0]
+	}
+	return handler
 }
 
 func (h *ServerHandler) RegisterRoutes(group *gin.RouterGroup) {
@@ -91,6 +101,9 @@ func (h *ServerHandler) list(c *gin.Context) {
 	if err != nil {
 		h.writeDBError(c, err, "list server connections failed")
 		return
+	}
+	if h.runtime != nil {
+		connections = h.runtime.OverlayServerConnections(connections)
 	}
 	OK(c, NewPageResponse(serverConnectionResponses(connections), total, page))
 }
@@ -145,6 +158,9 @@ func (h *ServerHandler) update(c *gin.Context) {
 		h.writeDBError(c, err, "update server connection failed")
 		return
 	}
+	if h.runtime != nil {
+		h.runtime.ForgetServerConnectionState(id)
+	}
 	_ = db.InsertAuditLog(c.Request.Context(), h.database, currentActor(c), "server_update", "server_connection", strconv.FormatInt(connection.ID, 10), fmt.Sprintf("updated server connection %s", connection.Name), c.ClientIP())
 	OK(c, serverConnectionResponseFrom(connection))
 }
@@ -158,6 +174,9 @@ func (h *ServerHandler) delete(c *gin.Context) {
 	if err != nil {
 		h.writeDBError(c, err, "delete server connection failed")
 		return
+	}
+	if h.runtime != nil {
+		h.runtime.ForgetServerConnectionState(id)
 	}
 	_ = db.InsertAuditLog(c.Request.Context(), h.database, currentActor(c), "server_delete", "server_connection", strconv.FormatInt(connection.ID, 10), fmt.Sprintf("deleted server connection %s", connection.Name), c.ClientIP())
 	OK(c, serverConnectionResponseFrom(connection))
@@ -180,6 +199,9 @@ func (h *ServerHandler) setManualConnectionState(c *gin.Context, updateFn func(c
 	if err != nil {
 		h.writeDBError(c, err, "set server connection status failed")
 		return
+	}
+	if h.runtime != nil {
+		h.runtime.ForgetServerConnectionState(id)
 	}
 	_ = db.InsertAuditLog(c.Request.Context(), h.database, currentActor(c), action, "server_connection", strconv.FormatInt(connection.ID, 10), fmt.Sprintf("%s %s", contentPrefix, connection.Name), c.ClientIP())
 	OK(c, serverConnectionResponseFrom(connection))

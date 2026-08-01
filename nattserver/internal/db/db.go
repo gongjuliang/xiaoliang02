@@ -14,6 +14,7 @@ import (
 	"os"
 	// path/filepath 提供文件路径解析和拼接。
 	"path/filepath"
+	"strings"
 	// time 提供连接空闲超时的时间设置。
 	"time"
 
@@ -39,7 +40,7 @@ func Open(ctx context.Context, path string, log *logger.Logger) (*sql.DB, error)
 	}
 
 	// 打开SQLite数据库连接（使用modernc.org/sqlite驱动）
-	database, err := sql.Open("sqlite", path)
+	database, err := sql.Open("sqlite", sqliteDSN(path))
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database: %w", err)
 	}
@@ -79,4 +80,12 @@ func Open(ctx context.Context, path string, log *logger.Logger) (*sql.DB, error)
 		return nil, fmt.Errorf("migrate sqlite database: %w", err)
 	}
 	return database, nil
+}
+
+func sqliteDSN(path string) string {
+	separator := "?"
+	if strings.Contains(path, "?") {
+		separator = "&"
+	}
+	return path + separator + "_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)"
 }

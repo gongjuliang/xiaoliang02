@@ -59,6 +59,7 @@ type Manager struct {
 	database  *sql.DB        // 数据库连接
 	log       *logger.Logger // 日志记录器
 	options   Options        // 运行时选项
+	state     *connectionStateCache
 
 	mu      sync.Mutex                       // 保护active map的互斥锁
 	active  map[int64]*activeConnection      // 活跃控制连接映射：tunnel_connection ID → activeConnection
@@ -87,6 +88,7 @@ func NewManagerWithOptions(cfg *config.Config, database *sql.DB, log *logger.Log
 		database:  database,
 		log:       log,
 		options:   normalizeOptions(options),
+		state:     newConnectionStateCache(database, 0, 0),
 		active:    make(map[int64]*activeConnection),
 		data:      make(map[string]*activeDataConnection),
 		udpRelays: make(map[int64]*activeUDPRelay),
@@ -94,6 +96,7 @@ func NewManagerWithOptions(cfg *config.Config, database *sql.DB, log *logger.Log
 }
 
 func (m *Manager) Run(ctx context.Context) error {
+	go m.state.run(ctx, m.logError)
 	if err := m.syncConnections(ctx); err != nil {
 		m.logError("initial control connection sync failed: %v", err)
 	}
@@ -133,6 +136,7 @@ func (m *Manager) syncConnections(ctx context.Context) error {
 		if _, ok := desired[id]; !ok {
 			active.cancel()
 			delete(m.active, id)
+			m.state.remove(id)
 		}
 	}
 	m.mu.Unlock()
@@ -185,7 +189,7 @@ func (m *Manager) stopAll() {
 func (m *Manager) runConnection(ctx context.Context, connection model.ServerConnection) {
 	for {
 		if ctx.Err() != nil {
-			_ = db.MarkServerConnectionStopped(context.Background(), m.database, connection.ID)
+			m.persistState(context.Background(), connection.ID, model.ServerConnectionStatusStopped, "", 0)
 			return
 		}
 		if !m.shouldRun(ctx, connection.ID) {
@@ -194,17 +198,17 @@ func (m *Manager) runConnection(ctx context.Context, connection model.ServerConn
 
 		if err := m.connectAndServe(ctx, connection); err != nil {
 			if ctx.Err() != nil {
-				_ = db.MarkServerConnectionStopped(context.Background(), m.database, connection.ID)
+				m.persistState(context.Background(), connection.ID, model.ServerConnectionStatusStopped, "", 0)
 				return
 			}
 			m.logError("control connection failed server_connection_id=%d: %v", connection.ID, err)
-			_ = db.MarkServerConnectionError(context.Background(), m.database, connection.ID, err.Error())
+			m.persistState(context.Background(), connection.ID, model.ServerConnectionStatusError, err.Error(), 0)
 		}
 
 		// A failed control connection loops until the saved record is stopped or
 		// deleted, giving auto-start connections process-level reconnects.
 		if !sleepContext(ctx, m.options.ReconnectInterval) {
-			_ = db.MarkServerConnectionStopped(context.Background(), m.database, connection.ID)
+			m.persistState(context.Background(), connection.ID, model.ServerConnectionStatusStopped, "", 0)
 			return
 		}
 		refreshed, err := db.GetServerConnectionByID(ctx, m.database, connection.ID)
@@ -235,9 +239,7 @@ func (m *Manager) shouldRun(ctx context.Context, id int64) bool {
 }
 
 func (m *Manager) connectAndServe(ctx context.Context, connection model.ServerConnection) error {
-	if err := db.MarkServerConnectionConnecting(ctx, m.database, connection.ID); err != nil {
-		return err
-	}
+	m.state.set(connection.ID, model.ServerConnectionStatusConnecting, "", 0, time.Now())
 
 	conn, err := m.dial(ctx, connection)
 	if err != nil {
@@ -295,9 +297,7 @@ func (m *Manager) connectAndServe(ctx context.Context, connection model.ServerCo
 	if authResp.TunnelProtocol != "" && !strings.EqualFold(authResp.TunnelProtocol, connection.Protocol) {
 		return fmt.Errorf("隧道协议不匹配")
 	}
-	if err := db.MarkServerConnectionConnectedWithRemotePort(ctx, m.database, connection.ID, authResp.RemotePort); err != nil {
-		return err
-	}
+	m.persistState(ctx, connection.ID, model.ServerConnectionStatusConnected, "", authResp.RemotePort)
 	m.logInfo("control connected server_connection_id=%d remote=%s", connection.ID, conn.RemoteAddr().String())
 
 	heartbeatInterval := m.options.HeartbeatInterval
@@ -415,7 +415,7 @@ func (m *Manager) handleMessage(ctx context.Context, connectionID int64, writer 
 		return nil
 	case protocol.TypeTunnelStop:
 		m.logInfo("received control command server_connection_id=%d type=%s request_id=%s", connectionID, message.Type, message.RequestID)
-		_ = db.MarkServerConnectionError(ctx, m.database, connectionID, serverTunnelStoppedError)
+		m.persistState(ctx, connectionID, model.ServerConnectionStatusError, serverTunnelStoppedError, 0)
 		m.closeDataConnectionsForServer(connectionID)
 		m.stopUDPRelay(connectionID)
 		return nil
@@ -435,25 +435,34 @@ func (m *Manager) handleHeartbeatAck(ctx context.Context, connectionID int64, me
 	}
 	switch strings.TrimSpace(ack.TunnelStatus) {
 	case "stopped":
-		if err := db.MarkServerConnectionError(ctx, m.database, connectionID, serverTunnelStoppedError); err != nil {
-			return err
-		}
+		m.persistState(ctx, connectionID, model.ServerConnectionStatusError, serverTunnelStoppedError, 0)
 		m.closeDataConnectionsForServer(connectionID)
 		m.stopUDPRelay(connectionID)
 		return nil
 	case "error":
 		if strings.TrimSpace(ack.LastError) != "" {
-			if err := db.MarkServerConnectionError(ctx, m.database, connectionID, ack.LastError); err != nil {
-				return err
-			}
+			m.persistState(ctx, connectionID, model.ServerConnectionStatusError, ack.LastError, 0)
 			m.closeDataConnectionsForServer(connectionID)
 			return nil
 		}
 	}
-	if ack.RemotePort > 0 {
-		return db.MarkServerConnectionConnectedWithRemotePort(ctx, m.database, connectionID, ack.RemotePort)
+	m.state.set(connectionID, model.ServerConnectionStatusConnected, "", ack.RemotePort, time.Now())
+	return nil
+}
+
+func (m *Manager) persistState(ctx context.Context, connectionID int64, status model.ServerConnectionStatus, lastError string, remotePort int) {
+	m.state.set(connectionID, status, lastError, remotePort, time.Now())
+	if err := m.state.flushOne(ctx, connectionID); err != nil {
+		m.logError("persist connection state failed server_connection_id=%d: %v", connectionID, err)
 	}
-	return db.MarkServerConnectionHeartbeat(ctx, m.database, connectionID)
+}
+
+func (m *Manager) OverlayServerConnections(connections []model.ServerConnection) []model.ServerConnection {
+	return m.state.overlayAll(connections)
+}
+
+func (m *Manager) ForgetServerConnectionState(connectionID int64) {
+	m.state.remove(connectionID)
 }
 
 func localizeProtocolError(err protocol.ProtocolError) string {

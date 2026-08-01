@@ -172,6 +172,29 @@ func TestTrafficRecorderFlushesDeltasPeriodically(t *testing.T) {
 	waitForTrafficStatValues(t, database, tunnel.ID, 1, 0, 11, 13)
 }
 
+func TestTrafficRecorderRestoresPendingDeltaAfterFailedFlush(t *testing.T) {
+	ctx := context.Background()
+	database, err := db.Open(ctx, filepath.Join(t.TempDir(), "test.db"), nil)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	recorder := newTrafficRecorder(database, nil, time.Second)
+	recorder.recordTrafficDelta(42, 17, 19)
+	if err := database.Close(); err != nil {
+		t.Fatalf("close database: %v", err)
+	}
+
+	recorder.flush(ctx)
+
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	got := recorder.pending[42]
+	if got.bytesInDelta != 17 || got.bytesOutDelta != 19 {
+		t.Fatalf("pending delta=%+v, want bytes_in=17 bytes_out=19 after failed flush", got)
+	}
+}
+
 func waitForTrafficStatValues(t *testing.T, database interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, tunnelID int64, connectionCount int64, activeConnections int64, bytesIn int64, bytesOut int64) {

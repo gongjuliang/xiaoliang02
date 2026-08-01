@@ -44,6 +44,9 @@ Use this skill when working on the `xiaoliang02` intranet penetration project. P
 - Server tunnel recovery: only auto-recover `status=error` when `last_error` is exactly `隧道控制连接已离线`; reconnect or heartbeat should restart the tunnel and clear that error.
 - Heartbeat acks carry `tunnel_status`, `last_error`, and `remote_port`; client heartbeat handling must sync server `stopped`/`error` into local visible status.
 - Audit logs are JSONL files under `xiaoliang02_*/logs/audit/YYYY-MM-DD.jsonl`, not SQLite audit storage.
+- Each control runtime owns its status cache. Do not introduce package-level global state: auth/stop/offline/error transitions persist immediately with bounded SQLite-busy retry, while ordinary heartbeats batch to SQLite at most every 30 seconds.
+- API list responses must overlay the live runtime snapshot. Persisted offline entries may remain in memory for two minutes, then expire; a deleted tunnel or connection must evict its snapshot immediately.
+- SQLite DSNs must configure `foreign_keys(1)` and `busy_timeout(5000)` for every pooled physical connection. Traffic flush failures must merge their deltas back into memory before retrying.
 
 ## Common Commands
 

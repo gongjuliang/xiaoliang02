@@ -157,6 +157,7 @@ func (r *trafficRecorder) flush(ctx context.Context) {
 		if err := db.ApplyTunnelTrafficDelta(ctx, r.database, tunnelID, delta.connectionCountDelta, delta.activeConnectionsDelta, delta.bytesInDelta, delta.bytesOutDelta); err != nil {
 			// 刷盘失败记录错误日志但不中断（下一个周期会重试）
 			r.logError("flush traffic stats failed tunnel_id=%d: %v", tunnelID, err)
+			r.add(tunnelID, delta)
 		}
 	}
 }

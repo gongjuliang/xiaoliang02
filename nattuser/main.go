@@ -87,9 +87,9 @@ func main() {
 	}
 	defer database.Close()
 
-	router := api.NewRouter(cfg, database, log)
-	httpServer := httpserver.New(cfg.HTTP, router, log)
 	controlManager := control.NewManager(cfg, database, log)
+	router := api.NewRouterWithRuntime(cfg, database, log, controlManager)
+	httpServer := httpserver.New(cfg.HTTP, router, log)
 
 	runners := buildServiceRunners(httpServer.Run, controlManager.Run)
 	if err := runServices(ctx, log, runners...); err != nil {

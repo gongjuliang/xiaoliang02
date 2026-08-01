@@ -468,8 +468,19 @@ func TestManagerHeartbeatAckRunningUpdatesRemotePort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get server connection: %v", err)
 	}
+	overlaid := manager.OverlayServerConnections([]model.ServerConnection{stored})[0]
+	if overlaid.Status != model.ServerConnectionStatusConnected || overlaid.LastError != "" || overlaid.RemotePort != 25530 {
+		t.Fatalf("live connection after running heartbeat=%+v, want connected remote_port=25530", overlaid)
+	}
+	if err := manager.state.flush(ctx); err != nil {
+		t.Fatalf("flush connection state: %v", err)
+	}
+	stored, err = db.GetServerConnectionByID(ctx, database, connection.ID)
+	if err != nil {
+		t.Fatalf("get flushed server connection: %v", err)
+	}
 	if stored.Status != model.ServerConnectionStatusConnected || stored.LastError != "" || stored.RemotePort != 25530 {
-		t.Fatalf("stored connection after running heartbeat=%+v, want connected remote_port=25530", stored)
+		t.Fatalf("stored connection after flush=%+v, want connected remote_port=25530", stored)
 	}
 }
 

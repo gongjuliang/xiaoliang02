@@ -224,6 +224,19 @@ WHERE id = ?;`, status, lastError, id)
 	return GetServerConnectionByID(ctx, database, id)
 }
 
+func SetServerConnectionRuntimeState(ctx context.Context, database *sql.DB, id int64, status model.ServerConnectionStatus, lastError string, remotePort int) error {
+	result, err := database.ExecContext(ctx, `
+UPDATE tunnel_connections
+SET status = ?,
+    last_error = CASE WHEN ? = '' THEN NULL ELSE ? END,
+    remote_port = CASE WHEN ? > 0 THEN ? ELSE remote_port END
+WHERE id = ?;`, status, strings.TrimSpace(lastError), strings.TrimSpace(lastError), remotePort, remotePort, id)
+	if err != nil {
+		return fmt.Errorf("set server connection runtime state: %w", err)
+	}
+	return ensureRowsAffected(result, ErrNotFound)
+}
+
 func MarkServerConnectionConnecting(ctx context.Context, database *sql.DB, id int64) error {
 	_, err := SetServerConnectionStatus(ctx, database, id, model.ServerConnectionStatusConnecting, "")
 	return err

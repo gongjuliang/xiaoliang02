@@ -35,6 +35,8 @@ type TunnelRuntime interface {
 	StartTunnel(ctx context.Context, id int64) (model.Tunnel, error)
 	StopTunnel(ctx context.Context, id int64) (model.Tunnel, error)
 	DisconnectTunnel(id int64)
+	OverlayTunnelStates([]model.Tunnel) []model.Tunnel
+	ForgetTunnelState(int64)
 }
 
 // tunnelRequest 隧道创建/更新的请求参数结构体。
@@ -107,6 +109,9 @@ func (h *TunnelHandler) list(c *gin.Context) {
 	if err != nil {
 		h.writeDBError(c, err, "list tunnels failed")
 		return
+	}
+	if h.runtime != nil {
+		tunnels = h.runtime.OverlayTunnelStates(tunnels)
 	}
 	OK(c, NewPageResponse(tunnels, total, page))
 }
@@ -192,6 +197,9 @@ func (h *TunnelHandler) rotateSecret(c *gin.Context) {
 		h.writeDBError(c, err, "rotate tunnel secret failed")
 		return
 	}
+	if h.runtime != nil {
+		h.runtime.ForgetTunnelState(id)
+	}
 	_ = db.InsertAuditLog(c.Request.Context(), h.database, currentActor(c), "tunnel_rotate_secret", "tunnel", strconv.FormatInt(tunnel.ID, 10), fmt.Sprintf("rotated secret for tunnel %s", tunnel.Name), c.ClientIP())
 	OK(c, tunnelSecretResponse{Tunnel: tunnel, Key: key, Secret: secret})
 }
@@ -216,6 +224,7 @@ func (h *TunnelHandler) setKeyStatus(c *gin.Context, status model.TunnelKeyStatu
 	}
 	if status == model.TunnelKeyStatusDisabled && h.runtime != nil {
 		_, _ = h.runtime.StopTunnel(c.Request.Context(), id)
+		h.runtime.ForgetTunnelState(id)
 	}
 	_ = db.InsertAuditLog(c.Request.Context(), h.database, currentActor(c), action, "tunnel", strconv.FormatInt(id, 10), fmt.Sprintf("%s %d", contentPrefix, id), c.ClientIP())
 	OK(c, key)
@@ -241,6 +250,7 @@ func (h *TunnelHandler) delete(c *gin.Context) {
 			return
 		}
 		h.runtime.DisconnectTunnel(id)
+		h.runtime.ForgetTunnelState(id)
 	}
 	deleted, err := db.DeleteTunnel(c.Request.Context(), h.database, id)
 	if err != nil {
@@ -277,6 +287,9 @@ func (h *TunnelHandler) runTunnelAction(c *gin.Context, actionFn func(context.Co
 		h.writeRuntimeError(c, err, "tunnel runtime action failed")
 		return
 	}
+	if h.runtime != nil {
+		h.runtime.ForgetTunnelState(id)
+	}
 	_ = db.InsertAuditLog(c.Request.Context(), h.database, currentActor(c), action, "tunnel", strconv.FormatInt(tunnel.ID, 10), fmt.Sprintf("%s %s", contentPrefix, tunnel.Name), c.ClientIP())
 	OK(c, tunnel)
 }
@@ -296,6 +309,9 @@ func (h *TunnelHandler) setStatus(c *gin.Context, status model.TunnelStatus, act
 	if err != nil {
 		h.writeDBError(c, err, "set tunnel status failed")
 		return
+	}
+	if h.runtime != nil {
+		h.runtime.ForgetTunnelState(id)
 	}
 	_ = db.InsertAuditLog(c.Request.Context(), h.database, currentActor(c), action, "tunnel", strconv.FormatInt(tunnel.ID, 10), fmt.Sprintf("%s %s", contentPrefix, tunnel.Name), c.ClientIP())
 	OK(c, tunnel)

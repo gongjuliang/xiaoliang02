@@ -428,6 +428,12 @@ func (r *fakeTunnelRuntime) DisconnectTunnel(id int64) {
 	r.disconnected[id] = true
 }
 
+func (r *fakeTunnelRuntime) OverlayTunnelStates(tunnels []model.Tunnel) []model.Tunnel {
+	return tunnels
+}
+
+func (r *fakeTunnelRuntime) ForgetTunnelState(id int64) {}
+
 func authorizedJSONAllowStatus(t *testing.T, router http.Handler, method string, path string, accessToken string, body any, wantStatus int) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := authorizedJSONRaw(t, router, method, path, accessToken, body)
