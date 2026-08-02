@@ -16,6 +16,14 @@ import (
 	"nattuser/internal/protocol"
 )
 
+func TestDataHostTreatsDualStackWildcardAsServerAddress(t *testing.T) {
+	for _, host := range []string{"", "0.0.0.0", "::", "[::]"} {
+		if got := dataHost(host, "server.example.com"); got != "server.example.com" {
+			t.Fatalf("dataHost(%q)=%q want server.example.com", host, got)
+		}
+	}
+}
+
 func TestManagerOpensDataConnectionAndForwardsToLocalTCPService(t *testing.T) {
 	ctx := context.Background()
 	database, err := db.Open(ctx, filepath.Join(t.TempDir(), "test.db"), nil)

@@ -300,7 +300,6 @@ func TestServerMCPCreateTunnelDefaultsAutoStartToTrue(t *testing.T) {
 	rec := callServerMCP(t, router, "server-mcp-token", "server.create_tunnel", map[string]any{
 		"name":        "mcp-default-autostart",
 		"protocol":    "tcp",
-		"remote_host": "0.0.0.0",
 		"remote_port": 18082,
 	})
 	if rec.Code != http.StatusOK {
@@ -312,6 +311,9 @@ func TestServerMCPCreateTunnelDefaultsAutoStartToTrue(t *testing.T) {
 	decodeMCPToolStructured(t, rec, &createdPayload)
 	if !createdPayload.Tunnel.AutoStart {
 		t.Fatalf("auto_start=false want default true: %+v", createdPayload.Tunnel)
+	}
+	if createdPayload.Tunnel.RemoteHost != "[::]" {
+		t.Fatalf("remote_host=%q want [::]", createdPayload.Tunnel.RemoteHost)
 	}
 	if createdPayload.Tunnel.Status != model.TunnelStatusWaiting {
 		t.Fatalf("status=%s want=%s", createdPayload.Tunnel.Status, model.TunnelStatusWaiting)

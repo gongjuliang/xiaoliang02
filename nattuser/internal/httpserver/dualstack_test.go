@@ -15,3 +15,15 @@ func TestListenTCPDualKeepsIPv4WhenIPv6Fails(t *testing.T) {
 		t.Fatal("expected IPv6 listener error")
 	}
 }
+
+func TestDualStackWildcardNormalizesForBothFamilies(t *testing.T) {
+	if got := normalizeIPv4Host("[::]"); got != "0.0.0.0" {
+		t.Fatalf("normalizeIPv4Host([::])=%q want 0.0.0.0", got)
+	}
+	if got := normalizeIPv6Host("[::]"); got != "::" {
+		t.Fatalf("normalizeIPv6Host([::])=%q want ::", got)
+	}
+	if got := normalizeIPv6Host("0.0.0.0"); got != "::" {
+		t.Fatalf("normalizeIPv6Host(0.0.0.0)=%q want ::", got)
+	}
+}

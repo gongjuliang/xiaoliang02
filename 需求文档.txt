@@ -91,18 +91,18 @@ nattuser\
 
 | 用途 | 默认值 |
 | --- | --- |
-| Web 管理后台 | `0.0.0.0:25510` 和 `[::]:25510` |
-| MCP 接口 | `0.0.0.0:25510/mcp` |
-| 客户端控制连接 | `0.0.0.0:25511` 和 `[::]:25511` |
-| 客户端数据连接 | `0.0.0.0:25512` 和 `[::]:25512` |
+| Web 管理后台 | `[::]:25510`（同时接收 IPv4/IPv6） |
+| MCP 接口 | `[::]:25510/mcp` |
+| 客户端控制连接 | `[::]:25511`（同时接收 IPv4/IPv6） |
+| 客户端数据连接 | `[::]:25512`（同时接收 IPv4/IPv6） |
 | 公网映射端口范围 | `0-65535` |
 
 客户端：
 
 | 用途 | 默认值 |
 | --- | --- |
-| Web 管理后台 | `0.0.0.0:25520` 和 `[::]:25520` |
-| MCP 接口 | `127.0.0.1:25520/mcp` |
+| Web 管理后台 | `[::]:25520`（同时接收 IPv4/IPv6） |
+| MCP 接口 | `[::]:25520/mcp` |
 | 默认服务端控制端口 | `25511` |
 | 默认服务端数据端口 | `25512` |
 
@@ -152,7 +152,7 @@ Web 控制台 HTTPS 仅作用于 Web 管理后台，不恢复隧道协议 TLS。
     "environment": "production"
   },
   "http": {
-    "host": "0.0.0.0",
+    "host": "[::]",
     "ipv6_host": "::",
     "port": 25510,
     "https_enabled": false,
@@ -175,10 +175,10 @@ Web 控制台 HTTPS 仅作用于 Web 管理后台，不恢复隧道协议 TLS。
     "login_rate_limit_per_minute": 10
   },
   "protocol": {
-    "control_host": "0.0.0.0",
+    "control_host": "[::]",
     "control_ipv6_host": "::",
     "control_port": 25511,
-    "data_host": "0.0.0.0",
+    "data_host": "[::]",
     "data_ipv6_host": "::",
     "data_port": 25512
   },
@@ -202,7 +202,7 @@ Web 控制台 HTTPS 仅作用于 Web 管理后台，不恢复隧道协议 TLS。
     "environment": "production"
   },
   "http": {
-    "host": "0.0.0.0",
+    "host": "[::]",
     "ipv6_host": "::",
     "port": 25520,
     "https_enabled": false,
@@ -304,6 +304,8 @@ Web 登录：
 - 客户端后台点击“断开”属于用户主动停止，必须同时设置 `auto_start=false`；之后不再自动重连，直到用户点击“连接”重新设置 `auto_start=true`。
 - 服务端隧道因控制连接离线进入 `error`，且 `last_error=隧道控制连接已离线` 时，原客户端重新上线或发送心跳后应自动恢复隧道并清空该错误；其他错误不得自动恢复。
 - 服务端 `heartbeat_ack` 应携带当前 `tunnel_status`、`last_error`、`remote_port`；客户端收到服务端 `stopped` 或带详情的 `error` 后，应将本地连接同步为 `error` 并展示对应中文状态详情。
+- UDP 中继连接断开、服务端或客户端重启后，处于 `waiting`、`running` 或 `last_error=UDP中继连接已离线` 的 UDP 隧道应在客户端重新认证或心跳时自动恢复；服务端重新下发 `tunnel_start`，客户端重新建立数据连接并发送 `udp_bind`，收到 `udp_bind_ack` 后才改为 `running`。
+- `stopped` 是管理员主动停止状态，不得因认证或心跳自动恢复；端口占用、配置错误、秘钥错误等其他错误也不得被自动清除。IPv4/IPv6 默认通配监听地址为 `[::]`，内部分别建立 IPv4 与 IPv6 listener；IPv6 不可用时保留 IPv4 运行，旧配置 `0.0.0.0` 继续兼容。
 - 服务端同一 `(protocol, remote_port)` 只能有一条隧道；TCP 与 UDP 可以使用同一个端口号。
 - UDP 使用 `udp_bind`、`udp_bind_ack`、`udp_packet` 协议帧。服务端确认中继注册后再允许客户端转发数据，避免 UDP 首包在中继建立期间丢失。
 - UDP 公网源 `IP:端口` 对应一个会话，默认 60 秒未活动过期；每个 UDP 隧道默认上限 1024 会话，单包最大 65507 字节。本地服务仅能向已存在的公网会话回包。

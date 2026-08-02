@@ -118,6 +118,9 @@ func TestDefaultUsesNewStartupPorts(t *testing.T) {
 	if cfg.HTTP.Port != 25520 {
 		t.Fatalf("http.port=%d want 25520", cfg.HTTP.Port)
 	}
+	if cfg.HTTP.Host != "[::]" {
+		t.Fatalf("http.host=%q want [::]", cfg.HTTP.Host)
+	}
 	if cfg.HTTP.HTTPSEnabled {
 		t.Fatal("http.https_enabled default must be false")
 	}

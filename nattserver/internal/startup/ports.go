@@ -38,7 +38,7 @@ func CheckPorts(checks []PortCheck) error {
 		// 去除主机地址的首尾空白
 		host := strings.TrimSpace(check.Host)
 		// 如果主机地址为空，默认使用0.0.0.0（监听所有网络接口）
-		if host == "" {
+		if host == "" || host == "::" || host == "[::]" {
 			host = "0.0.0.0"
 		}
 		// 使用端口号字符串作为去重键

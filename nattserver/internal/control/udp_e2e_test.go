@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -185,6 +186,8 @@ func TestConcurrentStartUDPTunnelDoesNotConflict(t *testing.T) {
 		t.Fatal("UDP tunnel was not active after concurrent starts")
 	}
 
+	_ = controlConn.Close()
+	waitForTunnelKeyOnlineStatus(t, database, tunnel.ID, model.OnlineStatusOffline)
 	cancel()
 	select {
 	case err := <-runDone:
@@ -194,6 +197,26 @@ func TestConcurrentStartUDPTunnelDoesNotConflict(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for server shutdown")
 	}
+}
+
+func waitForTunnelKeyOnlineStatus(t *testing.T, database *sql.DB, tunnelID int64, want model.OnlineStatus) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		key, err := db.GetTunnelKeyByTunnelID(context.Background(), database, tunnelID)
+		if err != nil {
+			t.Fatalf("load tunnel key: %v", err)
+		}
+		if key.OnlineStatus == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	key, err := db.GetTunnelKeyByTunnelID(context.Background(), database, tunnelID)
+	if err != nil {
+		t.Fatalf("load tunnel key: %v", err)
+	}
+	t.Fatalf("tunnel key online status=%s want=%s", key.OnlineStatus, want)
 }
 
 func freeUDPPort(t *testing.T) int {

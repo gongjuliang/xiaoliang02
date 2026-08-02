@@ -76,6 +76,19 @@ func TestCheckPortsAllowsConfiguredIPv6Fallback(t *testing.T) {
 	}
 }
 
+func TestCheckPortsAcceptsDualStackWildcard(t *testing.T) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen free port probe: %v", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	_ = listener.Close()
+
+	if err := CheckPorts([]PortCheck{{Name: "HTTP", Host: "[::]", IPv6Host: "::", Port: port}}); err != nil {
+		t.Fatalf("check [::] wildcard: %v", err)
+	}
+}
+
 func TestCheckPortsRejectsDuplicateConfiguredPort(t *testing.T) {
 	err := CheckPorts([]PortCheck{
 		{Name: "HTTP管理端口", Host: "0.0.0.0", Port: 25520},

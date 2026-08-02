@@ -328,7 +328,7 @@ func (h *TunnelHandler) bindAndValidateTunnelRequest(c *gin.Context, req *tunnel
 		req.Protocol = string(model.TunnelProtocolTCP)
 	}
 	if req.RemoteHost == "" {
-		req.RemoteHost = "0.0.0.0"
+		req.RemoteHost = "[::]"
 	}
 
 	switch {

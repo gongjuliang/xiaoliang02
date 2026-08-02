@@ -23,7 +23,7 @@ import (
 const (
 	// RuntimeRoot 客户端运行时文件根目录，所有相对路径都基于此目录。
 	RuntimeRoot = "xiaoliang02_user"
-	Version     = "v0.1"
+	Version     = "v0.2"
 )
 
 var (
@@ -183,7 +183,7 @@ func Default() *Config {
 		},
 		HTTP: HTTPConfig{
 			IPv6Host:               "::",
-			Host:                   "0.0.0.0",
+			Host:                   "[::]",
 			Port:                   25520,
 			HTTPSEnabled:           false,
 			CertFile:               filepath.Join(RuntimeRoot, "ssl", "web.crt"),

@@ -55,9 +55,10 @@ D:\2025Code\ai\natt
 - One server tunnel ID may be occupied by only one active client connection at a time.
 - Tunnel protocol is persisted as `tcp` or `udp`; server/client list endpoints accept `protocol=tcp|udp`, and the old TCP pages always request `protocol=tcp`.
 - Server uniqueness is `(protocol, remote_port)`, allowing one TCP and one UDP listener to share a port number.
-- Listeners use required IPv4 plus optional IPv6. Configuration defaults to `0.0.0.0` and `::`; IPv6 bind failure logs a Chinese warning without disabling IPv4.
+- Listeners use IPv4/IPv6 dual stack. Configuration defaults to `[::]`; the runtime creates separate IPv4 and IPv6 listeners, and an IPv6 bind failure logs a Chinese warning without disabling IPv4. Legacy `0.0.0.0` configuration remains compatible.
 - Starting a server tunnel while its client is offline should move it to `waiting`, set `auto_start=true`, clear `last_error`, and avoid binding the public port until reconnect.
 - If a running tunnel loses its control connection, the server writes `last_error=隧道控制连接已离线`; only this error is automatically recovered when the same client reconnects or sends heartbeat.
+- UDP relay recovery is also triggered by client authentication or heartbeat after a relay disconnect or process restart. Recoverable UDP states are `waiting`, `running`, and `last_error=UDP中继连接已离线`; the client rebinds the data channel and the server marks it running only after `udp_bind_ack`. Manual `stopped` and unrelated errors do not recover automatically.
 - `heartbeat_ack` carries `tunnel_status`, `last_error`, and `remote_port`; the client uses it as a fallback to sync server `stopped`/`error` when it misses a command.
 - Client Web/MCP “disconnect” is user intent: it sets the connection to `stopped`, clears `last_error`, and disables `auto_start`; Web/MCP “connect” enables `auto_start` again.
 - If the server tunnel is stopped, the client status detail must be:

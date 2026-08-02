@@ -44,11 +44,21 @@ type udpServerRelay struct {
 
 func (s *Server) startUDPTunnel(ctx context.Context, tunnel model.Tunnel) (model.Tunnel, error) {
 	s.udpMu.Lock()
-	if s.udpTunnels[tunnel.ID] != nil {
-		s.udpMu.Unlock()
-		return db.SetTunnelStatus(ctx, s.database, tunnel.ID, model.TunnelStatusRunning, "")
-	}
+	active := s.udpTunnels[tunnel.ID]
 	s.udpMu.Unlock()
+	if active != nil {
+		if active.hasRelay() {
+			return db.SetTunnelStatus(ctx, s.database, tunnel.ID, model.TunnelStatusRunning, "")
+		}
+		if !s.hasActiveClient(tunnel.ID) {
+			return db.SetTunnelWaiting(ctx, s.database, tunnel.ID)
+		}
+		if err := s.sendUDPStartCommand(tunnel); err != nil {
+			s.closeActiveClient(tunnel.ID)
+			return db.SetTunnelWaiting(ctx, s.database, tunnel.ID)
+		}
+		return db.SetTunnelStatus(ctx, s.database, tunnel.ID, model.TunnelStatusWaiting, "")
+	}
 	if !s.hasActiveClient(tunnel.ID) {
 		return db.SetTunnelWaiting(ctx, s.database, tunnel.ID)
 	}
@@ -60,7 +70,7 @@ func (s *Server) startUDPTunnel(ctx context.Context, tunnel model.Tunnel) (model
 	if ipv6Err != nil {
 		s.logError("IPv6公网UDP监听不可用，已继续使用IPv4 tunnel_id=%d: %v", tunnel.ID, ipv6Err)
 	}
-	active := &activeUDPTunnel{
+	active = &activeUDPTunnel{
 		tunnel:      tunnel,
 		listeners:   listeners,
 		stopCh:      make(chan struct{}),
@@ -78,13 +88,7 @@ func (s *Server) startUDPTunnel(ctx context.Context, tunnel model.Tunnel) (model
 	s.udpTunnels[tunnel.ID] = active
 	s.udpMu.Unlock()
 
-	startCommand, err := protocol.NewMessage(protocol.TypeTunnelStart, tunnel.ClientID, tunnel.ID, "", tunnelPayload(tunnel))
-	if err != nil {
-		s.removeActiveUDPTunnel(tunnel.ID)
-		active.stop()
-		return s.markTunnelError(ctx, tunnel.ID, err)
-	}
-	if err := s.SendToClient(tunnel.ID, startCommand); err != nil {
+	if err := s.sendUDPStartCommand(tunnel); err != nil {
 		s.removeActiveUDPTunnel(tunnel.ID)
 		active.stop()
 		s.closeActiveClient(tunnel.ID)
@@ -95,7 +99,15 @@ func (s *Server) startUDPTunnel(ctx context.Context, tunnel model.Tunnel) (model
 		go s.receiveUDPPackets(active, listener)
 	}
 	go s.expireUDPSessions(active)
-	return db.SetTunnelStatus(ctx, s.database, tunnel.ID, model.TunnelStatusRunning, "")
+	return db.SetTunnelStatus(ctx, s.database, tunnel.ID, model.TunnelStatusWaiting, "")
+}
+
+func (s *Server) sendUDPStartCommand(tunnel model.Tunnel) error {
+	startCommand, err := protocol.NewMessage(protocol.TypeTunnelStart, tunnel.ClientID, tunnel.ID, "", tunnelPayload(tunnel))
+	if err != nil {
+		return err
+	}
+	return s.SendToClient(tunnel.ID, startCommand)
 }
 
 func (s *Server) receiveUDPPackets(active *activeUDPTunnel, listener *net.UDPConn) {
@@ -226,7 +238,7 @@ func (s *Server) recordUDPRelayOffline(tunnelID int64) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if _, err := db.SetTunnelStatus(ctx, s.database, tunnelID, model.TunnelStatusError, "UDP中继连接已离线"); err != nil {
+	if _, err := db.SetTunnelStatus(ctx, s.database, tunnelID, model.TunnelStatusError, udpRelayOfflineMessage); err != nil {
 		s.logError("记录UDP中继离线失败 tunnel_id=%d: %v", tunnelID, err)
 	}
 }
@@ -299,6 +311,12 @@ func (t *activeUDPTunnel) setRelay(relay *udpServerRelay) *udpServerRelay {
 	previous := t.relay
 	t.relay = relay
 	return previous
+}
+
+func (t *activeUDPTunnel) hasRelay() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.relay != nil
 }
 
 func (t *activeUDPTunnel) clearRelay(relay *udpServerRelay) bool {

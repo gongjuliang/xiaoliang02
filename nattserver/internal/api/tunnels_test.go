@@ -33,6 +33,9 @@ func TestTunnelManagementFlow(t *testing.T) {
 	if created.ID == 0 || created.Protocol != model.TunnelProtocolTCP || !created.AutoStart {
 		t.Fatalf("unexpected created tunnel: %+v", created)
 	}
+	if created.RemoteHost != "[::]" {
+		t.Fatalf("remote_host=%q want [::]", created.RemoteHost)
+	}
 	if createData.Secret == "" || createData.Key.SecretHint == "" {
 		t.Fatalf("create response did not include tunnel secret data: %+v", createData)
 	}

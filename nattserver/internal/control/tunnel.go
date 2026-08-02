@@ -671,7 +671,7 @@ func tunnelPayload(tunnel model.Tunnel) tunnelCommandPayload {
 // 返回值：对外公布的地址。
 func advertisedDataHost(host string) string {
 	host = strings.TrimSpace(host)
-	if host == "" || host == "0.0.0.0" || host == "::" {
+	if host == "" || host == "0.0.0.0" || host == "::" || host == "[::]" {
 		return ""
 	}
 	return host
@@ -683,7 +683,7 @@ func advertisedDataHost(host string) string {
 func hostOrDefault(host string) string {
 	host = strings.TrimSpace(host)
 	if host == "" {
-		return "0.0.0.0"
+		return "[::]"
 	}
 	return host
 }

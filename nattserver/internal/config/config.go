@@ -16,7 +16,7 @@ import (
 const (
 	// RuntimeRoot 服务端运行时文件根目录，所有相对路径都基于此目录。
 	RuntimeRoot = "xiaoliang02_server"
-	Version     = "v0.1"
+	Version     = "v0.2"
 )
 
 var (
@@ -188,7 +188,7 @@ func Default() *Config {
 		},
 		HTTP: HTTPConfig{
 			IPv6Host:               "::",
-			Host:                   "0.0.0.0",
+			Host:                   "[::]",
 			Port:                   25510,
 			HTTPSEnabled:           false,
 			CertFile:               filepath.Join(RuntimeRoot, "ssl", "web.crt"),
@@ -215,10 +215,10 @@ func Default() *Config {
 		},
 		Protocol: ProtocolConfig{
 			ControlIPv6Host: "::",
-			ControlHost:     "0.0.0.0",
+			ControlHost:     "[::]",
 			ControlPort:     25511,
 			DataIPv6Host:    "::",
-			DataHost:        "0.0.0.0",
+			DataHost:        "[::]",
 			DataPort:        25512,
 		},
 		Tunnel: TunnelConfig{

@@ -33,6 +33,9 @@ const tunnelStoppedByServerMessage = "服务端暂停了隧道连接，请通知
 // controlOfflineMessage 是控制连接异常离线时写入状态详情的可恢复错误。
 const controlOfflineMessage = "隧道控制连接已离线"
 
+// udpRelayOfflineMessage 是公网 UDP listener 仍存在但客户端中继数据连接已断开时的可恢复错误。
+const udpRelayOfflineMessage = "UDP中继连接已离线"
+
 // Server 控制通道服务器，管理服务端所有客户端连接、隧道和数据通道。
 // 内部维护三个并发安全的Map：active（在线客户端）、tunnels（活跃隧道）、pending（待绑定数据连接）。
 type Server struct {
@@ -391,7 +394,7 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 		s.logError("mark tunnel online failed tunnel_id=%d: %v", key.TunnelID, err)
 	}
 	_ = writeWithDeadline(conn, authResponse(first.RequestID, true, clientID, key.TunnelID, remotePort, "ok", string(tunnel.Protocol)))
-	if !s.recoverControlOfflineTunnel(ctx, key.TunnelID) {
+	if !s.recoverTunnelOnClientOnline(ctx, key.TunnelID) {
 		s.startTunnelIfAutoStart(ctx, key.TunnelID)
 	}
 
@@ -440,7 +443,7 @@ func (s *Server) handleMessage(ctx context.Context, client *clientConn, message 
 	switch message.Type {
 	case protocol.TypeHeartbeat:
 		s.state.markOnline(client.tunnelID, "", time.Now())
-		s.recoverControlOfflineTunnel(ctx, client.tunnelID)
+		s.recoverTunnelOnClientOnline(ctx, client.tunnelID)
 		ack, err := protocol.NewMessage(protocol.TypeHeartbeatAck, 0, client.tunnelID, "", s.heartbeatAckPayload(ctx, client.tunnelID))
 		if err != nil {
 			return err
@@ -531,6 +534,36 @@ func (s *Server) recoverControlOfflineTunnel(ctx context.Context, tunnelID int64
 	}
 	if _, err := s.StartTunnel(ctx, tunnel.ID); err != nil {
 		s.logError("recover offline tunnel failed tunnel_id=%d: %v", tunnel.ID, err)
+	}
+	return true
+}
+
+// recoverTunnelOnClientOnline restores only runtime states that are expected to
+// be usable when the control connection is online. Explicit stops and
+// configuration/listener failures remain untouched.
+func (s *Server) recoverTunnelOnClientOnline(ctx context.Context, tunnelID int64) bool {
+	if s.recoverControlOfflineTunnel(ctx, tunnelID) {
+		return true
+	}
+
+	tunnel, err := db.GetTunnelByID(ctx, s.database, tunnelID)
+	if err != nil {
+		s.logError("load tunnel for UDP recovery failed tunnel_id=%d: %v", tunnelID, err)
+		return false
+	}
+	if tunnel.Protocol != model.TunnelProtocolUDP {
+		return false
+	}
+
+	recoverable := tunnel.Status == model.TunnelStatusWaiting || tunnel.Status == model.TunnelStatusRunning
+	if tunnel.Status == model.TunnelStatusError {
+		recoverable = strings.TrimSpace(tunnel.LastError) == udpRelayOfflineMessage
+	}
+	if !recoverable {
+		return false
+	}
+	if _, err := s.StartTunnel(ctx, tunnel.ID); err != nil {
+		s.logError("recover UDP tunnel failed tunnel_id=%d: %v", tunnel.ID, err)
 	}
 	return true
 }

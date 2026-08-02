@@ -29,7 +29,7 @@ Use this skill when working on the `xiaoliang02` intranet penetration project. P
 - Do not reintroduce tunnel protocol TLS. Web console HTTPS is separate and only belongs to `http.https_enabled`.
 - Do not make `nattserver` store local target host or local target port for tunnels. Local targets are configured by `nattuser`.
 - Tunnels have a persisted `protocol` of `tcp` or `udp`; default omitted values to `tcp`. Keep `tunnels.html` TCP-only and `udp-tunnels.html` UDP-only.
-- Web, control, data, and public listeners are IPv4/IPv6 dual stack. IPv4 binding is required; IPv6 binding failures must log a Chinese warning and keep IPv4 running.
+- Web, control, data, and public listeners are IPv4/IPv6 dual stack. The default wildcard is `[::]`; the runtime creates separate IPv4 and IPv6 listeners. IPv6 binding failures must log a Chinese warning and keep IPv4 running, while legacy `0.0.0.0` remains dual-stack compatible.
 - Server tunnel uniqueness is `(protocol, remote_port)`, so TCP and UDP may share a port number.
 - UDP public traffic uses the existing data TCP port. A client sends `udp_bind`, waits for `udp_bind_ack`, then exchanges `udp_packet` frames. Do not send UDP payload before the acknowledgement.
 - UDP maps each public source `IP:port` to a local UDP socket. Defaults: 60-second idle timeout, 1024 sessions per tunnel, and 65507-byte maximum datagram; local targets may only reply through an existing session.
@@ -42,6 +42,8 @@ Use this skill when working on the `xiaoliang02` intranet penetration project. P
 - `StartTunnel` must serialize auto-start and manual start attempts to prevent public-listener and SQLite status-update races.
 - Server manual start while the client is offline must set the tunnel to `waiting`, enable `auto_start`, clear `last_error`, and not bind the public port until the client reconnects.
 - Server tunnel recovery: only auto-recover `status=error` when `last_error` is exactly `隧道控制连接已离线`; reconnect or heartbeat should restart the tunnel and clear that error.
+- UDP recovery: after a relay disconnect or either process restarts, UDP states `waiting`, `running`, and `last_error=UDP中继连接已离线` recover on client authentication/heartbeat. The server sends `tunnel_start`, the client reconnects the data channel and sends `udp_bind`, and the tunnel becomes running only after `udp_bind_ack`.
+- Never auto-recover explicit `stopped` tunnels or unrelated errors such as port conflicts, configuration failures, and invalid secrets.
 - Heartbeat acks carry `tunnel_status`, `last_error`, and `remote_port`; client heartbeat handling must sync server `stopped`/`error` into local visible status.
 - Audit logs are JSONL files under `xiaoliang02_*/logs/audit/YYYY-MM-DD.jsonl`, not SQLite audit storage.
 - Each control runtime owns its status cache. Do not introduce package-level global state: auth/stop/offline/error transitions persist immediately with bounded SQLite-busy retry, while ordinary heartbeats batch to SQLite at most every 30 seconds.
@@ -68,14 +70,14 @@ If Windows locks Go temp executables, set a unique `GOTMPDIR` under the workspac
 
 Server:
 
-- Web: `0.0.0.0:25510` and `[::]:25510`.
-- Control: `0.0.0.0:25511` and `[::]:25511`.
-- Data: `0.0.0.0:25512` and `[::]:25512`.
+- Web: `[::]:25510` (dual-stack IPv4/IPv6).
+- Control: `[::]:25511` (dual-stack IPv4/IPv6).
+- Data: `[::]:25512` (dual-stack IPv4/IPv6).
 - Public tunnel range: `0-65535`, but created tunnel ports must be `1-65535`.
 
 Client:
 
-- Web: `0.0.0.0:25520` and `[::]:25520`.
+- Web: `[::]:25520` (dual-stack IPv4/IPv6).
 - Default control port: `25511`.
 - Default data port: `25512`.
 - No default server host during initialization; each tunnel connection supplies its own server host.

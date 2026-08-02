@@ -423,7 +423,7 @@ func (h *serverHandler) validateTunnelParams(params *tunnelParams) error {
 		params.Protocol = string(model.TunnelProtocolTCP)
 	}
 	if params.RemoteHost == "" {
-		params.RemoteHost = "0.0.0.0"
+		params.RemoteHost = "[::]"
 	}
 
 	switch {
@@ -663,7 +663,7 @@ func tunnelCreateSchema() map[string]any {
 	return objectSchema(map[string]any{
 		"name":        map[string]any{"type": "string"},
 		"protocol":    map[string]any{"type": "string", "enum": []string{"tcp", "udp"}, "default": "tcp"},
-		"remote_host": map[string]any{"type": "string"},
+		"remote_host": map[string]any{"type": "string", "default": "[::]", "description": "Dual-stack wildcard listener by default."},
 		"remote_port": map[string]any{"type": "integer", "minimum": 1, "maximum": 65535},
 		"auto_start":  map[string]any{"type": "boolean", "default": true, "description": "Omitted value defaults to true and creates a waiting tunnel."},
 		"remark":      map[string]any{"type": "string"},

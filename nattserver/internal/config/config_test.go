@@ -124,6 +124,12 @@ func TestDefaultUsesNewStartupPortsAndTunnelRange(t *testing.T) {
 	if cfg.HTTP.Port != 25510 {
 		t.Fatalf("http.port=%d want 25510", cfg.HTTP.Port)
 	}
+	if cfg.HTTP.Host != "[::]" {
+		t.Fatalf("http.host=%q want [::]", cfg.HTTP.Host)
+	}
+	if cfg.Protocol.ControlHost != "[::]" || cfg.Protocol.DataHost != "[::]" {
+		t.Fatalf("protocol hosts=%q,%q want [::],[::]", cfg.Protocol.ControlHost, cfg.Protocol.DataHost)
+	}
 	if cfg.HTTP.HTTPSEnabled {
 		t.Fatal("http.https_enabled default must be false")
 	}

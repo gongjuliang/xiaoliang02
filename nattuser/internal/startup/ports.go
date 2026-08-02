@@ -31,7 +31,7 @@ func CheckPorts(checks []PortCheck) error {
 	seen := make(map[string]struct{}, len(checks))
 	for _, check := range checks {
 		host := strings.TrimSpace(check.Host)
-		if host == "" {
+		if host == "" || host == "::" || host == "[::]" {
 			host = "0.0.0.0"
 		}
 		key := strconv.Itoa(check.Port)

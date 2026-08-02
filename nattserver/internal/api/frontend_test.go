@@ -43,9 +43,9 @@ func TestRouterServesEmbeddedFrontend(t *testing.T) {
 	_ = getFrontend(t, router, "/agreement.html")
 
 	tunnels := getFrontend(t, router, "/tunnels.html")
-	assertContainsAll(t, tunnels, "t.secret", "secret_hint", "maskSecret", "show-secret", "renderDetailText", "show-detail", "formatBytes", "bytes_in", "bytes_out", "last_error", `id="as" type="checkbox" checked`, "auto_start", "protocol=tcp", `protocol: "tcp"`)
+	assertContainsAll(t, tunnels, "t.secret", "secret_hint", "maskSecret", "show-secret", "renderDetailText", "show-detail", "formatBytes", "bytes_in", "bytes_out", "last_error", `id="as" type="checkbox" checked`, "auto_start", "protocol=tcp", `protocol: "tcp"`, `value="[::]"`)
 	udpTunnels := getFrontend(t, router, "/udp-tunnels.html")
-	assertContainsAll(t, udpTunnels, "UDP 隧道", "protocol=udp", `protocol: "udp"`, "udp")
+	assertContainsAll(t, udpTunnels, "UDP 隧道", "protocol=udp", `protocol: "udp"`, "udp", `value="[::]"`)
 	assertContainsAll(t, index, "udp-tunnels.html", "data-view=\"udp-tunnels\"")
 
 	configPage := getFrontend(t, router, "/config.html")

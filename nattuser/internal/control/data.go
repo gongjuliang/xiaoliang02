@@ -207,7 +207,7 @@ func (m *Manager) dialLocal(ctx context.Context, dataOpen protocol.DataOpen) (ne
 
 func dataHost(payloadHost string, serverHost string) string {
 	payloadHost = strings.TrimSpace(payloadHost)
-	if payloadHost == "" || payloadHost == "0.0.0.0" || payloadHost == "::" {
+	if payloadHost == "" || payloadHost == "0.0.0.0" || payloadHost == "::" || payloadHost == "[::]" {
 		return serverHost
 	}
 	return payloadHost
