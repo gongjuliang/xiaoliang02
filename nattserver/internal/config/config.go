@@ -183,7 +183,7 @@ func Default() *Config {
 	return &Config{
 		App: AppConfig{
 			Name:        "nattserver",
-			Version:     "0.1.0",
+			Version:     "0.2.0",
 			Environment: "production",
 		},
 		HTTP: HTTPConfig{
